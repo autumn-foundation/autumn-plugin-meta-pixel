@@ -412,3 +412,17 @@ test('empty names and array params', () => {
   });
   assert.deepEqual(env.calls().slice(2), [['trackSingle', '111', 'Lead', {}]]);
 });
+
+test('morph then history restore does not fire a block again', () => {
+  const block = eventBlock({ name: 'Lead', custom: false, params: {} });
+  const env = makeEnv({ config: { ...CONFIG, pixelIds: ['111'] }, body: [block] });
+  assert.equal(env.calls().length, 3);
+  // Morph: same element, same text, done attribute gone.
+  block.removeAttribute('data-autumn-meta-pixel-done');
+  env.dispatch('htmx:load', { detail: { elt: block } });
+  // History snapshot: a new element with the attributes of the live one.
+  const restored = new El('script', { ...block.attrs }, block.textContent);
+  env.bodyEl.appendChild(restored);
+  env.dispatch('htmx:load', { detail: { elt: restored } });
+  assert.equal(env.calls().length, 3);
+});

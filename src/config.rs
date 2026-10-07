@@ -219,20 +219,30 @@ impl MetaPixelConfig {
         let args: Vec<String> = std::env::args_os()
             .filter_map(|a| a.into_string().ok())
             .collect();
-        Self::load_from(profile, &os, dotenv, &args)
+        // autumn's `OsEnv` also gives the crate dir that
+        // `#[autumn_web::main]` records at compile time.
+        let manifest_dir = {
+            use autumn_web::config::Env as _;
+            autumn_web::config::OsEnv
+                .var("AUTUMN_MANIFEST_DIR")
+                .ok()
+                .map(PathBuf::from)
+        };
+        Self::load_from(profile, &os, dotenv, &args, manifest_dir)
     }
 
     /// [`load`](Self::load) with the process environment (`os`), the
-    /// `.env` values, and the process args as inputs.
+    /// `.env` values, the process args, and the manifest dir as inputs.
     ///
-    /// The profile selector (`AUTUMN_ENV`, `AUTUMN_PROFILE`, `--profile`) and
-    /// `AUTUMN_MANIFEST_DIR` come from `os` only, like autumn-web. The
-    /// overlay is `.env`, then `os` (later wins).
+    /// The profile selector (`AUTUMN_ENV`, `AUTUMN_PROFILE`, `--profile`)
+    /// comes from `os` only, like autumn-web. The overlay is `.env`, then
+    /// `os` (later wins). No `manifest_dir` means the current directory.
     fn load_from(
         profile: Option<&str>,
         os: &[(String, String)],
         dotenv: Vec<(String, String)>,
         args: &[String],
+        manifest_dir: Option<PathBuf>,
     ) -> Result<Self, MetaPixelError> {
         let var = |key: &str| {
             os.iter()
@@ -251,7 +261,7 @@ impl MetaPixelConfig {
                 autumn_web::config::profile_override_file_lookup_names(p, &selector)
             })
             .unwrap_or_default();
-        let dir = var("AUTUMN_MANIFEST_DIR").map_or_else(|| PathBuf::from("."), PathBuf::from);
+        let dir = manifest_dir.unwrap_or_else(|| PathBuf::from("."));
         let mut env = dotenv;
         env.extend(os.iter().cloned());
         Self::load_from_dir(&dir, &names, env)
@@ -588,21 +598,17 @@ mod tests {
             "autumn-production.toml",
             "[meta_pixel]\npixel_ids = [\"3\"]\n",
         );
-        let path = dir.0.to_string_lossy().into_owned();
-        let os = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
-            let mut v = env(pairs);
-            v.push(("AUTUMN_MANIFEST_DIR".to_owned(), path.clone()));
-            v
-        };
+        let path = Some(dir.0.clone());
+        let os = env;
         let load = |os: &[(String, String)], args: &[String]| {
-            MetaPixelConfig::load_from(Some("prod"), os, Vec::new(), args)
+            MetaPixelConfig::load_from(Some("prod"), os, Vec::new(), args, path.clone())
                 .unwrap()
                 .pixel_ids
         };
         // AUTUMN_MANIFEST_DIR and the app profile: `prod` spelling first.
         assert_eq!(load(&os(&[]), &[]), ["2"]);
         // No profile: no profile layer.
-        let c = MetaPixelConfig::load_from(None, &os(&[]), Vec::new(), &[]).unwrap();
+        let c = MetaPixelConfig::load_from(None, &os(&[]), Vec::new(), &[], path.clone()).unwrap();
         assert_eq!(c.pixel_ids, ["1"]);
         // The selector spelling `production` (env or `--profile`) wins.
         assert_eq!(load(&os(&[("AUTUMN_ENV", "production")]), &[]), ["3"]);
@@ -620,7 +626,8 @@ mod tests {
             ("AUTUMN_META_PIXEL__PIXEL_IDS", "4"),
             ("AUTUMN_META_PIXEL__NOSCRIPT", "false"),
         ]);
-        let c = MetaPixelConfig::load_from(None, &os(&[]), dotenv.clone(), &[]).unwrap();
+        let c =
+            MetaPixelConfig::load_from(None, &os(&[]), dotenv.clone(), &[], path.clone()).unwrap();
         assert_eq!(c.pixel_ids, ["4"]);
         assert!(!c.noscript);
         let c = MetaPixelConfig::load_from(
@@ -628,9 +635,14 @@ mod tests {
             &os(&[("AUTUMN_META_PIXEL__PIXEL_IDS", "5")]),
             dotenv,
             &[],
+            path.clone(),
         )
         .unwrap();
         assert_eq!(c.pixel_ids, ["5"]);
+        // No manifest dir: the current directory (the crate root has no
+        // autumn.toml).
+        let c = MetaPixelConfig::load_from(None, &[], Vec::new(), &[], None).unwrap();
+        assert!(c.pixel_ids.is_empty());
     }
 
     #[test]

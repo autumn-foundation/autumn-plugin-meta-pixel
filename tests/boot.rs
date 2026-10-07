@@ -90,6 +90,46 @@ fn new_with_no_config_starts_off() {
     assert!(text.contains("1 passed"), "{text}");
 }
 
+/// `#[autumn_web::main]` records the crate dir. `load` must find
+/// `autumn.toml` there when the app runs from another folder. Runs only in
+/// the child process.
+#[test]
+#[ignore = "runs only as the child of load_finds_config_in_the_macro_manifest_dir"]
+fn macro_dir_child() {
+    let Ok(dir) = std::env::var("META_PIXEL_TEST_CRATE_DIR") else {
+        return;
+    };
+    autumn_web::config::__set_macro_context(dir, true);
+    let config = autumn_plugin_meta_pixel::MetaPixelConfig::load(None).unwrap();
+    assert_eq!(config.pixel_ids, ["123"]);
+}
+
+#[test]
+fn load_finds_config_in_the_macro_manifest_dir() {
+    let base = std::env::temp_dir().join(format!("meta-pixel-macro-{}", std::process::id()));
+    let (krate, elsewhere) = (base.join("crate"), base.join("elsewhere"));
+    std::fs::create_dir_all(&krate).unwrap();
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::write(
+        krate.join("autumn.toml"),
+        "[meta_pixel]\npixel_ids = [\"123\"]\n",
+    )
+    .unwrap();
+    let out = child("macro_dir_child")
+        .env("META_PIXEL_TEST_CRATE_DIR", &krate)
+        .current_dir(&elsewhere)
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&base);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{text}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(text.contains("1 passed"), "{text}");
+}
+
 struct KillOnDrop(Child);
 
 impl Drop for KillOnDrop {

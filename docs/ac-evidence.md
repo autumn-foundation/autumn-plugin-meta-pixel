@@ -12,11 +12,11 @@ are in `tests/js/meta-pixel.test.mjs`; browser steps are in
 
 | Command | Result |
 |---|---|
-| `cargo test` | 76 unit, 13 `TestApp`, 2 child-process, 1 contract, 3 doc tests pass. |
-| `node --test tests/js/*.test.mjs` | 27 pass. |
+| `cargo test` | 76 unit, 13 `TestApp`, 3 child-process, 1 contract, 3 doc tests pass. |
+| `node --test tests/js/*.test.mjs` | 28 pass. |
 | `node tests/e2e/browser.mjs` (Chromium) | `e2e: ok`. |
 | `verus verus/policy.rs` | 34 verified, 0 errors. |
-| `cargo llvm-cov --all-targets --summary-only` | 97.9% lines. |
+| `cargo llvm-cov --all-targets --summary-only` | 97.7% lines. |
 | `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, rustdoc `-D warnings`, `cargo +1.88.0 check` | Clean. |
 
 ## Criteria
@@ -31,9 +31,9 @@ are in `tests/js/meta-pixel.test.mjs`; browser steps are in
 | AC6 | Three fire paths: data block (page or htmx swap), `HX-Trigger`, click attribute. Each fires once. | JS: `event blocks fire once…`, `a morph that drops the done attribute…`, `htmx:load fires events in swapped content…`, `HX-Trigger event fires each event…`, `click on a data-meta-pixel element… capture phase`, `an fbq error does not stop the other events`. `htmx_partial_gets_trigger_header_and_block`. `pixel::tests::hx_trigger_value_is_visible_ascii_and_round_trips`, `history_restore_requests_get_no_event_blocks`. e2e steps 3 (click), 4 (htmx swap + `HX-Trigger`), 5 (`consume` click), 6 (boost), 7 (history back: no second fire). |
 | AC7 | Consent gate, GPC (server and browser), `enabled = false`. | `pixel::tests::consent_gate`, `consent_uses_the_configured_policy_version`, `gpc_and_off_switch`, `off_pixel_renders_nothing`. `plugin_policy_version_closes_the_gate_for_old_consent` (`TestApp`). `no_consent_no_pixel` (no markup, no `HX-Trigger`), `gpc_request_gets_no_pixel`, `disabled_config_gets_no_pixel`. JS: `GPC: honored stops the load`, `revoke: …`. Verus: `lemma_no_pixel_without_consent`, `lemma_gpc_wins`, `lemma_disabled_is_off`, `lemma_active_when_allowed` (the gate is not always off). e2e steps 1 (no consent: no `fbq`, no request to Meta), 8 (withdrawal revokes), 10 (`Sec-GPC: 1`). |
 | AC8 | Startup checks: bad config fails; a CSP that blocks the pixel fails with the fixed CSP, or warns, or is off. | `bad_pixel_id_fails_startup`, `default_csp_fails_startup` (message has the fixed CSP), `csp_check_warn_starts`. `plugin::tests::default_csp_fails_with_the_fix`, `fixed_csp_passes`, `warn_and_off_do_not_fail`, `nonce_note_*`, `trusted_types_fails_with_a_reason`. `csp::tests::*` (15 cases, 3 property tests: the fix closes all gaps, keeps a good policy, keeps other directives). Manual: the example app with a CSP that blocks `connect.facebook.net` does not start. |
-| AC9 | Serde config with validation, layered TOML, `AUTUMN_META_PIXEL__*` env vars. | `config::tests::*` (13 cases: defaults, unknown keys, env typing and `1`/`0`, inline profile order, env over the profile file, first profile file wins, `load_from` with `AUTUMN_MANIFEST_DIR`, `AUTUMN_ENV`, `AUTUMN_PROFILE`, `--profile`, `.env` under the process env, unreadable file, validation, no secret in errors). `app_boots_with_env_config` and `new_with_no_config_starts_off` (child processes with a clean env). |
+| AC9 | Serde config with validation, layered TOML, `AUTUMN_META_PIXEL__*` env vars. | `config::tests::*` (13 cases: defaults, unknown keys, env typing and `1`/`0`, inline profile order, env over the profile file, first profile file wins, `load_from` with `AUTUMN_MANIFEST_DIR`, `AUTUMN_ENV`, `AUTUMN_PROFILE`, `--profile`, `.env` under the process env, unreadable file, validation, no secret in errors). `app_boots_with_env_config`, `new_with_no_config_starts_off`, and `load_finds_config_in_the_macro_manifest_dir` (child processes with a clean env; the last one runs from another folder, like an app with `#[autumn_web::main]`). |
 | AC10 | `history_page_views` → `fbq.disablePushState`; `auto_config` → `fbq('set', 'autoConfig', false, id)`. | `pixel::tests::head_carries_each_config_value` (Rust sends `false`). JS: `pageView off, autoConfig off, history page views off`, `app fbq already present…` (flag set on an existing `fbq` too). e2e step 2 (`disablePushState` false by default). |
-| AC11 | fmt, clippy pedantic and nursery, no `unwrap` in `src/`, tests pass, coverage ≥ 85%, CI runs them. | `Cargo.toml` `[lints]`, `clippy.toml`. `.github/workflows/ci.yml`: `fmt`, `clippy` (+ rustdoc), `msrv`, `test` (`--fail-under-lines 85`, doc tests), `js`, `e2e`, `verus`. `.githooks/pre-commit`. Coverage 97.8%. |
+| AC11 | fmt, clippy pedantic and nursery, no `unwrap` in `src/`, tests pass, coverage ≥ 85%, CI runs them. | `Cargo.toml` `[lints]`, `clippy.toml`. `.github/workflows/ci.yml`: `fmt`, `clippy` (+ rustdoc), `msrv`, `test` (`--fail-under-lines 85`, doc tests), `js`, `e2e`, `verus`. `.githooks/pre-commit`. Coverage 97.7%. |
 | AC12 | Verus specs state the policy invariants. Proofs pass. | `verus/policy.rs`: 34 verified, 0 errors. Injected bugs give errors: no `>` escape, no consent term in the gate, an always-off gate, `<` escaped as `>`. `policy::tests::verus_spec_is_in_step` checks the constants and escape bytes of the spec. CI job `verus`. |
 | AC13 | README, CLAUDE.md, ADRs, Mermaid diagram, ASD-STE100. | `README.md` (Mermaid diagram), `CLAUDE.md`, `docs/plan.md` (Mermaid diagram), `docs/adr/0001…0003`, `CHANGELOG.md`. A reviewer agent checked the ASD-STE100 style; its findings are fixed. |
 
@@ -48,7 +48,7 @@ are in `tests/js/meta-pixel.test.mjs`; browser steps are in
 
 ## Review
 
-Round 1 and round 2 of fixes follow the same TDD order. The test and
+Two review rounds. Round 1: five reviewers. Round 2: one reviewer of the fix commits; it found two regressions (the manifest dir of `#[autumn_web::main]`, and a morph plus history restore that fired a block twice). Both are fixed test first and have regression tests. All fixes follow the same TDD order. The test and
 proof reviewer ran about 95 mutants. The 22 that lived now have tests, or
 are equal to the original code (for example a GPC check with `=== true`).
 
@@ -69,3 +69,6 @@ commit and in `CHANGELOG.md`. Findings that stay open, with the reason:
   process can take the port in between. This is rare, and the test then
   fails with a clear message.
 - The Conversions API is out of scope (`docs/plan.md` section 9).
+- A morph swap with the same event JSON does not fire again. Use a new
+  `event_id` for a repeat (README, htmx section).
+- After a revoke, a new grant needs a full page load (README, consent).

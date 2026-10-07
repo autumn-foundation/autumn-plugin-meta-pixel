@@ -97,6 +97,7 @@ The loader sends each event with `trackSingle` to each pixel in `pixel_ids`. So 
 - htmx reads one `HX-Trigger` header. Do not add a second one.
 - With `htmx.config.allowScriptTags = false`, htmx removes the event data blocks from swapped content. Use `hx_trigger_value` then.
 - Content that your JavaScript adds does not get an `htmx:load` event. Call `window.autumnMetaPixel.scan(element)`.
+- A morph swap (idiomorph) that keeps a block with the same JSON does not fire it again. To send the same event again in a morph swap, give each one a new `event_id`.
 - `hx-boost` does not swap `<head>`. A page that gets consent through a boosted request gets the pixel on the next full load. Send `HX-Refresh: true`, or use `hx-boost="false"` on the consent form.
 
 ## Consent
@@ -109,7 +110,7 @@ autumn_web::consent::accept_all_cookie(&["marketing"], POLICY_VERSION)
 MetaPixelPlugin::new().consent_policy_version(POLICY_VERSION)
 ```
 
-When the visitor withdraws consent, send `REVOKE_HX_TRIGGER` as the `HX-Trigger` value (or `HX-Refresh: true`). With `hx-boost`, the page and `fbevents.js` stay in memory. The loader then calls `fbq('consent', 'revoke')`, stops `pushState` page views, and sends no more events.
+When the visitor withdraws consent, send `REVOKE_HX_TRIGGER` as the `HX-Trigger` value (or `HX-Refresh: true`). With `hx-boost`, the page and `fbevents.js` stay in memory. The loader then calls `fbq('consent', 'revoke')`, stops `pushState` page views, and sends no more events. If the visitor gives consent again, do a full page load (`HX-Refresh: true`).
 
 Pages with the pixel vary per visitor. Do not use `CacheResponseLayer` for them (see autumn's cookie-consent guide).
 

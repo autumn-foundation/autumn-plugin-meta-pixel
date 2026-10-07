@@ -116,12 +116,14 @@
   function fireBlock(el) {
     var text = el.textContent;
     var seen = fired.get(el);
+    var done = el.hasAttribute(DONE_ATTR);
     fired.set(el, text);
+    // Always mark it: htmx history snapshots copy the attribute.
+    el.setAttribute(DONE_ATTR, '');
     if (seen === text) return;
     // A done block that is new to this page came from an htmx history
     // snapshot. It fired on an earlier visit.
-    if (seen === undefined && el.hasAttribute(DONE_ATTR)) return;
-    el.setAttribute(DONE_ATTR, '');
+    if (seen === undefined && done) return;
     track(parse(text));
   }
 
