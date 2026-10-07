@@ -126,14 +126,116 @@ proof fn lemma_escape_identity(s: Seq<u8>)
     }
 }
 
-/// The escape never makes the text shorter.
-proof fn lemma_escape_len(s: Seq<u8>)
+/// Spec: the value of a lower-case hex digit, or -1.
+pub open spec fn spec_hex(d: u8) -> int {
+    if 0x30 <= d && d <= 0x39 {
+        d - 0x30
+    } else if 0x61 <= d && d <= 0x66 {
+        d - 0x61 + 10
+    } else {
+        -1
+    }
+}
+
+/// Spec: `e` is a JSON escape `\u00XY`.
+pub open spec fn spec_is_json_escape(e: Seq<u8>) -> bool {
+    e.len() == 6 && e[0] == BACKSLASH && e[1] == 0x75u8 && e[2] == 0x30u8 && e[3] == 0x30u8
+        && spec_hex(e[4]) >= 0 && spec_hex(e[5]) >= 0
+}
+
+/// Spec: the byte that a JSON escape `\u00XY` gives.
+pub open spec fn spec_unescape(e: Seq<u8>) -> int {
+    16 * spec_hex(e[4]) + spec_hex(e[5])
+}
+
+/// Meaning: each escape is a JSON escape that gives back the byte. In a
+/// JSON string, the value does not change.
+proof fn lemma_escape_byte_decodes(b: u8)
+    requires
+        spec_html_special(b),
     ensures
-        spec_escape(s).len() >= s.len(),
+        spec_is_json_escape(spec_escape_byte(b)),
+        spec_unescape(spec_escape_byte(b)) == b as int,
+{
+    let e = spec_escape_byte(b);
+    assert(e[0] == BACKSLASH && e[1] == 0x75u8 && e[2] == 0x30u8 && e[3] == 0x30u8);
+}
+
+/// Spec: the number of bytes `b` in `s`.
+pub open spec fn spec_count(s: Seq<u8>, b: u8) -> nat
+    decreases s.len(),
+{
+    if s.len() == 0 {
+        0
+    } else {
+        spec_count(s.drop_last(), b) + if s.last() == b {
+            1nat
+        } else {
+            0nat
+        }
+    }
+}
+
+proof fn lemma_count_concat(a: Seq<u8>, c: Seq<u8>, b: u8)
+    ensures
+        spec_count(a + c, b) == spec_count(a, b) + spec_count(c, b),
+    decreases c.len(),
+{
+    if c.len() > 0 {
+        assert((a + c).drop_last() =~= a + c.drop_last());
+        lemma_count_concat(a, c.drop_last(), b);
+    } else {
+        assert(a + c =~= a);
+    }
+}
+
+/// A byte that does not occur has count 0.
+proof fn lemma_count_absent(s: Seq<u8>, b: u8)
+    requires
+        forall|i: int| 0 <= i < s.len() ==> s[i] != b,
+    ensures
+        spec_count(s, b) == 0,
     decreases s.len(),
 {
     if s.len() > 0 {
-        lemma_escape_len(s.drop_last());
+        let p = s.drop_last();
+        assert forall|i: int| 0 <= i < p.len() implies p[i] != b by {
+            assert(p[i] == s[i]);
+        }
+        lemma_count_absent(p, b);
+    }
+}
+
+/// The escape of one byte has a `"` only when the byte is `"`.
+proof fn lemma_escape_byte_quotes(b: u8)
+    ensures
+        spec_count(spec_escape_byte(b), QUOTE) == if b == QUOTE {
+            1nat
+        } else {
+            0nat
+        },
+{
+    let e = spec_escape_byte(b);
+    if spec_html_special(b) {
+        lemma_count_absent(e, QUOTE);
+    } else {
+        assert(e.drop_last() =~= Seq::<u8>::empty());
+        assert(e.last() == b);
+        assert(spec_count(e.drop_last(), QUOTE) == 0);
+    }
+}
+
+/// Structure: the escape adds and removes no `"`. So each JSON string
+/// starts and ends at the same place.
+proof fn lemma_escape_keeps_quotes(s: Seq<u8>)
+    ensures
+        spec_count(spec_escape(s), QUOTE) == spec_count(s, QUOTE),
+    decreases s.len(),
+{
+    if s.len() > 0 {
+        lemma_escape_keeps_quotes(s.drop_last());
+        lemma_count_concat(spec_escape(s.drop_last()), spec_escape_byte(s.last()), QUOTE);
+        lemma_escape_byte_quotes(s.last());
     }
 }
 
@@ -265,13 +367,20 @@ pub fn is_valid_event_name(s: &[u8]) -> (r: bool)
     true
 }
 
-/// A valid pixel ID is safe in HTML, in a JSON string, and in a URL query.
+/// Spec: a byte with a meaning in a URL query.
+pub open spec fn spec_query_special(b: u8) -> bool {
+    b == 0x26 || b == 0x3d || b == 0x23 || b == 0x3f || b == 0x25 || b == 0x2b || b == 0x20
+}
+
+/// A valid pixel ID is safe in HTML, in a JSON string, and in a URL query
+/// (no `&`, `=`, `#`, `?`, `%`, `+`, or space).
 proof fn lemma_pixel_id_safe(s: Seq<u8>)
     requires
         spec_pixel_id(s),
     ensures
         spec_html_safe(s),
         forall|i: int| 0 <= i < s.len() ==> !spec_json_special(#[trigger] s[i]),
+        forall|i: int| 0 <= i < s.len() ==> !spec_query_special(#[trigger] s[i]),
 {
 }
 
@@ -344,6 +453,19 @@ proof fn lemma_disabled_is_off(g: Gate)
         !g.enabled || !g.has_pixels,
     ensures
         !spec_active(g),
+{
+}
+
+/// Liveness: with all inputs that allow it, the pixel is on. So the gate
+/// is not "always off".
+proof fn lemma_active_when_allowed(g: Gate)
+    requires
+        g.enabled,
+        g.has_pixels,
+        g.consent_granted || !g.require_consent,
+        !(g.honor_gpc && g.gpc_signal),
+    ensures
+        spec_active(g),
 {
 }
 

@@ -244,19 +244,30 @@ async fn no_plugin_extractor_gives_off_pixel() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn new_with_no_config_file_starts_off() {
-    // No autumn.toml in the crate root: no pixel IDs, so the pixel is off.
+async fn plugin_policy_version_closes_the_gate_for_old_consent() {
     let client = TestApp::new()
+        .config(app_config())
         .routes(routes![index])
-        .plugin(MetaPixelPlugin::new())
+        .plugin(MetaPixelPlugin::with_config(pixel_config()).consent_policy_version(2))
         .build();
-    let body = client
+    let cookie = |version| {
+        let set = autumn_web::consent::accept_all_cookie(&["marketing"], version);
+        set.split(';').next().unwrap().to_owned()
+    };
+    let old = client
         .get("/")
-        .header("cookie", &consent_cookie())
+        .header("cookie", &cookie(1))
         .send()
         .await
         .text();
-    assert!(!body.contains("meta-pixel"), "{body}");
+    assert!(!old.contains("meta-pixel"), "{old}");
+    let new = client
+        .get("/")
+        .header("cookie", &cookie(2))
+        .send()
+        .await
+        .text();
+    assert!(new.contains("autumn-meta-pixel-config"), "{new}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

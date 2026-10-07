@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use autumn_plugin_meta_pixel::{MetaPixel, MetaPixelPlugin};
 use autumn_web::prelude::*;
+use autumn_web::test::TestApp;
 
 const CHILD_MARK: &str = "META_PIXEL_BOOT_TEST_CHILD";
 const CSP: &str = "default-src 'self'; script-src 'self' https://connect.facebook.net; \
@@ -34,6 +35,59 @@ async fn boot_child_server() {
         .plugin(MetaPixelPlugin::new())
         .run()
         .await;
+}
+
+/// A command that runs this test binary again with a clean environment:
+/// only `PATH`, so no `AUTUMN_*` value of the shell leaks in.
+fn child(test: &str) -> Command {
+    let mut cmd = Command::new(std::env::current_exe().unwrap());
+    cmd.args(["--exact", test, "--include-ignored", "--nocapture"])
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env(CHILD_MARK, "1");
+    cmd
+}
+
+/// `MetaPixelPlugin::new()` with no `autumn.toml` and no env: no pixel IDs,
+/// so the pixel is off. Runs only in the child process.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "runs only as the child of new_with_no_config_starts_off"]
+async fn new_child() {
+    if std::env::var(CHILD_MARK).is_err() {
+        return;
+    }
+    let client = TestApp::new()
+        .routes(routes![index])
+        .plugin(MetaPixelPlugin::new())
+        .build();
+    let set = autumn_web::consent::accept_all_cookie(&["marketing"], 1);
+    let cookie = set.split(';').next().unwrap().to_owned();
+    let body = client
+        .get("/")
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .text();
+    assert!(!body.contains("meta-pixel"), "{body}");
+}
+
+#[test]
+fn new_with_no_config_starts_off() {
+    let dir = std::env::temp_dir().join(format!("meta-pixel-empty-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = child("new_child")
+        .env("AUTUMN_MANIFEST_DIR", &dir)
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{text}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(text.contains("1 passed"), "{text}");
 }
 
 struct KillOnDrop(Child);
@@ -64,14 +118,7 @@ fn app_boots_with_env_config() {
         l.local_addr().unwrap().port()
     };
     let mut child = KillOnDrop(
-        Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "boot_child_server",
-                "--include-ignored",
-                "--nocapture",
-            ])
-            .env(CHILD_MARK, "1")
+        child("boot_child_server")
             .env("AUTUMN_SERVER__PORT", port.to_string())
             .env("AUTUMN_SERVER__HOST", "127.0.0.1")
             .env("AUTUMN_SECURITY__HEADERS__CONTENT_SECURITY_POLICY", CSP)

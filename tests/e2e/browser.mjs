@@ -135,6 +135,8 @@ try {
   await page.click('#add');
   c = await waitCalls(8);
   assert.equal(c.filter((x) => x[2] === 'CartOpened').length, 2);
+  assert.equal(c.filter((x) => x[2] === 'AddToCart').length, 2);
+  assert.equal(c.length, 8, JSON.stringify(c));
 
   // 5. A click with hx-trigger "consume" (stopPropagation) still fires.
   await page.click('#ask');

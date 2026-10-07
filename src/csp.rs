@@ -508,6 +508,16 @@ mod tests {
     }
 
     #[test]
+    fn none_in_a_specific_directive_is_replaced() {
+        let csp = "script-src 'none'; img-src *; connect-src *";
+        let fixed = with_meta_pixel_sources(csp, FB);
+        assert_eq!(
+            fixed,
+            format!("script-src 'self' {FB}; img-src *; connect-src *")
+        );
+    }
+
+    #[test]
     fn first_duplicate_directive_wins() {
         let csp = format!("script-src 'self'; script-src 'self' {FB}; img-src *; connect-src *");
         assert_eq!(gaps(&csp).len(), 1);

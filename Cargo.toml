@@ -9,7 +9,7 @@ repository = "https://github.com/autumn-foundation/autumn-plugin-meta-pixel"
 readme = "README.md"
 keywords = ["autumn", "meta-pixel", "facebook-pixel", "analytics", "plugin"]
 categories = ["web-programming"]
-exclude = [".github/", ".githooks/", "docs/", "verus/", "tests/js/", "tests/e2e/", "rust-toolchain.toml", "CLAUDE.md", "clippy.toml", "proptest-regressions/"]
+exclude = [".github/", ".githooks/", "docs/", "tests/js/", "tests/e2e/", "rust-toolchain.toml", "CLAUDE.md", "clippy.toml", "proptest-regressions/"]
 
 [dependencies]
 # `maud` gives the `PluginAssets` tag helpers. The host app picks the rest.

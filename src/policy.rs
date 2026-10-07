@@ -96,6 +96,40 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    /// `spec_escape` of `verus/policy.rs`, byte by byte.
+    fn spec_escape_bytes(input: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for &b in input {
+            match b {
+                b'<' => out.extend_from_slice(&[0x5c, 0x75, 0x30, 0x30, 0x33, 0x63]),
+                b'>' => out.extend_from_slice(&[0x5c, 0x75, 0x30, 0x30, 0x33, 0x65]),
+                b'&' => out.extend_from_slice(&[0x5c, 0x75, 0x30, 0x30, 0x32, 0x36]),
+                _ => out.push(b),
+            }
+        }
+        out
+    }
+
+    /// `verus/policy.rs` and this file have the same constants and escape
+    /// bytes.
+    #[test]
+    fn verus_spec_is_in_step() {
+        let spec = include_str!("../verus/policy.rs");
+        for line in [
+            format!("pub const MAX_PIXEL_ID_LEN: usize = {MAX_PIXEL_ID_LEN};"),
+            format!("pub const MAX_EVENT_NAME_LEN: usize = {MAX_EVENT_NAME_LEN};"),
+            "seq![0x5cu8, 0x75u8, 0x30u8, 0x30u8, 0x33u8, 0x63u8]".to_owned(),
+            "seq![0x5cu8, 0x75u8, 0x30u8, 0x30u8, 0x33u8, 0x65u8]".to_owned(),
+            "seq![0x5cu8, 0x75u8, 0x30u8, 0x30u8, 0x32u8, 0x36u8]".to_owned(),
+        ] {
+            assert!(spec.contains(&line), "verus/policy.rs has no `{line}`");
+        }
+        assert_eq!(
+            spec_escape_bytes(b"<>&"),
+            escape_json_for_html("<>&").into_bytes()
+        );
+    }
+
     #[test]
     fn escape_replaces_html_specials() {
         assert_eq!(
@@ -198,6 +232,13 @@ mod tests {
             prop_assert!(!out.contains(['<', '>', '&']));
         }
 
+        /// Differential: the `&str` escape gives the same bytes as the byte
+        /// escape of `verus/policy.rs` (`spec_escape`).
+        #[test]
+        fn escape_matches_the_byte_spec(s in any::<String>()) {
+            prop_assert_eq!(escape_json_for_html(&s).into_bytes(), spec_escape_bytes(s.as_bytes()));
+        }
+
         /// Same as `lemma_escape_identity`.
         #[test]
         fn escape_is_identity_on_safe_text(s in "[^<>&]*") {
@@ -214,7 +255,7 @@ mod tests {
 
         /// Same as `spec_pixel_id`.
         #[test]
-        fn pixel_id_matches_spec(s in ".{0,40}") {
+        fn pixel_id_matches_spec(s in "[0-9a<&]{0,40}") {
             let spec = (1..=MAX_PIXEL_ID_LEN).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit());
             prop_assert_eq!(is_valid_pixel_id(&s), spec);
         }

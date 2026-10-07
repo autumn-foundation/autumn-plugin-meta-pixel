@@ -478,6 +478,18 @@ mod tests {
     }
 
     #[test]
+    fn a_later_non_finite_value_removes_the_earlier_one() {
+        let ev = Event::standard(StandardEvent::Purchase)
+            .value(1.0)
+            .value(f64::NAN)
+            .predicted_ltv(2.0)
+            .predicted_ltv(f64::INFINITY);
+        assert!(ev.params().is_empty(), "{:?}", ev.params());
+        let ev = Event::standard(StandardEvent::Search).search_string("mugs");
+        assert_eq!(ev.params()["search_string"], "mugs");
+    }
+
+    #[test]
     fn custom_event_checks_name() {
         let ev = Event::custom("ShareClick").unwrap().for_pixel("123");
         assert!(ev.is_custom());

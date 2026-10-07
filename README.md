@@ -164,7 +164,7 @@ assert!(pixel.head().into_string().contains("autumn-meta-pixel-config"));
 
 ## Security notes
 
-- Config and events are JSON in `<script type="application/json">` blocks. The JSON escapes `<`, `>`, and `&`, so text cannot close the block. `verus/policy.rs` proves this.
+- Config and events are JSON in `<script type="application/json">` blocks. The JSON escapes `<`, `>`, and `&`, so text cannot close the block. `verus/policy.rs` proves that the output has none of these bytes, that each escape gives back its byte, and that no `"` changes. A differential property test shows that the shipped `&str` function gives the same bytes as the proved byte function.
 - `fbevents.js` is third-party code with full page access. Meta changes it often, so it has no SRI hash. The consent gate, GPC, and CSP host list limit it.
 - The loader fires each event block and `data-meta-pixel` attribute in the page. If you show user HTML, your sanitizer must remove `<script>` and the `data-meta-pixel` and `data-autumn-meta-pixel-event` attributes.
 - The plugin sends no personal data. Event parameters come from your code. Do not put e-mail addresses or phone numbers in them.

@@ -211,23 +211,50 @@ impl MetaPixelConfig {
     /// # Errors
     /// Returns [`MetaPixelError::Config`] when loading or validation fails.
     pub fn load(profile: Option<&str>) -> Result<Self, MetaPixelError> {
-        use autumn_web::config::Env as _;
-        let os = autumn_web::config::OsEnv;
+        let dotenv = autumn_web::dotenv::resolve_process_dotenv()
+            .map_err(|e| MetaPixelError::Config(format!(".env: {e}")))?;
+        let os: Vec<(String, String)> = std::env::vars_os()
+            .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+            .collect();
+        let args: Vec<String> = std::env::args_os()
+            .filter_map(|a| a.into_string().ok())
+            .collect();
+        Self::load_from(profile, &os, dotenv, &args)
+    }
+
+    /// [`load`](Self::load) with the process environment (`os`), the
+    /// `.env` values, and the process args as inputs.
+    ///
+    /// The profile selector (`AUTUMN_ENV`, `AUTUMN_PROFILE`, `--profile`) and
+    /// `AUTUMN_MANIFEST_DIR` come from `os` only, like autumn-web. The
+    /// overlay is `.env`, then `os` (later wins).
+    fn load_from(
+        profile: Option<&str>,
+        os: &[(String, String)],
+        dotenv: Vec<(String, String)>,
+        args: &[String],
+    ) -> Result<Self, MetaPixelError> {
+        let var = |key: &str| {
+            os.iter()
+                .rev()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+        };
         let names = profile
             .map(|p| {
                 // Same selector order as autumn-web: env vars, then `--profile`.
                 let selector = ["AUTUMN_ENV", "AUTUMN_PROFILE"]
                     .iter()
-                    .find_map(|k| os.var(k).ok().filter(|v| !v.trim().is_empty()))
-                    .or_else(profile_flag)
+                    .find_map(|k| var(k).filter(|v| !v.trim().is_empty()))
+                    .or_else(|| profile_flag(args))
                     .map_or_else(|| p.to_owned(), |v| v.trim().to_owned());
                 autumn_web::config::profile_override_file_lookup_names(p, &selector)
             })
             .unwrap_or_default();
-        let dir = os
-            .var("AUTUMN_MANIFEST_DIR")
-            .map_or_else(|_| PathBuf::from("."), PathBuf::from);
-        Self::load_from_dir(&dir, &names, process_env()?)
+        let dir = var("AUTUMN_MANIFEST_DIR").map_or_else(|| PathBuf::from("."), PathBuf::from);
+        let mut env = dotenv;
+        env.extend(os.iter().cloned());
+        Self::load_from_dir(&dir, &names, env)
     }
 
     /// Checks the values.
@@ -276,24 +303,8 @@ impl MetaPixelConfig {
     }
 }
 
-/// `.env` values, then the process environment (later wins).
-///
-/// It skips a variable whose name or value is not UTF-8.
-fn process_env() -> Result<Vec<(String, String)>, MetaPixelError> {
-    let mut vars = autumn_web::dotenv::resolve_process_dotenv()
-        .map_err(|e| MetaPixelError::Config(format!(".env: {e}")))?;
-    vars.extend(
-        std::env::vars_os()
-            .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))),
-    );
-    Ok(vars)
-}
-
-/// The value of `--profile <name>` or `--profile=<name>` in the process args.
-fn profile_flag() -> Option<String> {
-    let args: Vec<String> = std::env::args_os()
-        .filter_map(|a| a.into_string().ok())
-        .collect();
+/// The value of `--profile <name>` or `--profile=<name>` in `args`.
+fn profile_flag(args: &[String]) -> Option<String> {
     args.iter()
         .enumerate()
         .find_map(|(i, a)| {
@@ -516,10 +527,125 @@ mod tests {
         assert!(!c.noscript);
     }
 
+    /// A temp dir that goes away also when a test panics.
+    struct TempDir(std::path::PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("meta-pixel-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+        fn write(&self, file: &str, text: &str) {
+            std::fs::write(self.0.join(file), text).unwrap();
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn strings(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn env_wins_over_the_profile_file() {
+        let c = MetaPixelConfig::from_layers(
+            Some("[meta_pixel]\npixel_ids = [\"1\"]\n"),
+            &["prod".to_owned()],
+            Some("[meta_pixel]\npixel_ids = [\"2\"]\nnoscript = false\n"),
+            env(&[("AUTUMN_META_PIXEL__PIXEL_IDS", "3")]),
+        )
+        .unwrap();
+        assert_eq!(c.pixel_ids, ["3"]);
+        assert!(!c.noscript);
+    }
+
+    #[test]
+    fn first_profile_file_found_wins() {
+        let dir = TempDir::new("first");
+        dir.write("autumn-prod.toml", "[meta_pixel]\npixel_ids = [\"1\"]\n");
+        dir.write(
+            "autumn-production.toml",
+            "[meta_pixel]\npixel_ids = [\"2\"]\n",
+        );
+        let names = strings(&["prod", "production"]);
+        let c = MetaPixelConfig::load_from_dir(&dir.0, &names, std::iter::empty()).unwrap();
+        assert_eq!(c.pixel_ids, ["1"]);
+    }
+
+    #[test]
+    fn load_uses_manifest_dir_selector_flag_and_dotenv() {
+        let dir = TempDir::new("load");
+        dir.write("autumn.toml", "[meta_pixel]\npixel_ids = [\"1\"]\n");
+        dir.write("autumn-prod.toml", "[meta_pixel]\npixel_ids = [\"2\"]\n");
+        dir.write(
+            "autumn-production.toml",
+            "[meta_pixel]\npixel_ids = [\"3\"]\n",
+        );
+        let path = dir.0.to_string_lossy().into_owned();
+        let os = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            let mut v = env(pairs);
+            v.push(("AUTUMN_MANIFEST_DIR".to_owned(), path.clone()));
+            v
+        };
+        let load = |os: &[(String, String)], args: &[String]| {
+            MetaPixelConfig::load_from(Some("prod"), os, Vec::new(), args)
+                .unwrap()
+                .pixel_ids
+        };
+        // AUTUMN_MANIFEST_DIR and the app profile: `prod` spelling first.
+        assert_eq!(load(&os(&[]), &[]), ["2"]);
+        // No profile: no profile layer.
+        let c = MetaPixelConfig::load_from(None, &os(&[]), Vec::new(), &[]).unwrap();
+        assert_eq!(c.pixel_ids, ["1"]);
+        // The selector spelling `production` (env or `--profile`) wins.
+        assert_eq!(load(&os(&[("AUTUMN_ENV", "production")]), &[]), ["3"]);
+        assert_eq!(load(&os(&[("AUTUMN_PROFILE", "production")]), &[]), ["3"]);
+        assert_eq!(load(&os(&[("AUTUMN_ENV", " ")]), &[]), ["2"]);
+        for args in [
+            strings(&["app", "--profile", "production"]),
+            strings(&["app", "--profile=production"]),
+        ] {
+            assert_eq!(load(&os(&[]), &args), ["3"]);
+        }
+        assert_eq!(load(&os(&[]), &strings(&["app", "--profile="])), ["2"]);
+        // `.env` overlays the files; the process env wins over `.env`.
+        let dotenv = env(&[
+            ("AUTUMN_META_PIXEL__PIXEL_IDS", "4"),
+            ("AUTUMN_META_PIXEL__NOSCRIPT", "false"),
+        ]);
+        let c = MetaPixelConfig::load_from(None, &os(&[]), dotenv.clone(), &[]).unwrap();
+        assert_eq!(c.pixel_ids, ["4"]);
+        assert!(!c.noscript);
+        let c = MetaPixelConfig::load_from(
+            None,
+            &os(&[("AUTUMN_META_PIXEL__PIXEL_IDS", "5")]),
+            dotenv,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(c.pixel_ids, ["5"]);
+    }
+
+    #[test]
+    fn unreadable_config_file_is_an_error() {
+        let dir = TempDir::new("unreadable");
+        // A directory with the file name cannot be read as text.
+        std::fs::create_dir_all(dir.0.join("autumn.toml")).unwrap();
+        let err = MetaPixelConfig::load_from_dir(&dir.0, &[], std::iter::empty()).unwrap_err();
+        assert!(err.to_string().contains("autumn.toml"), "{err}");
+    }
+
     #[test]
     fn load_from_dir_reads_files() {
-        let dir = std::env::temp_dir().join(format!("meta-pixel-cfg-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let guard = TempDir::new("cfg");
+        let dir = guard.0.clone();
         std::fs::write(
             dir.join("autumn.toml"),
             "[meta_pixel]\npixel_ids = [\"10\"]\n",
@@ -540,7 +666,6 @@ mod tests {
         )
         .unwrap();
         assert!(MetaPixelConfig::load_from_dir(&dir, &[], std::iter::empty()).is_err());
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -559,6 +684,9 @@ mod tests {
         assert!(check(|c| c.script_url = "http://x.com/f.js".into()).contains("script_url"));
         assert!(check(|c| c.script_url = "https://x.com/f\".js".into()).contains("script_url"));
         assert!(check(|c| c.script_url = "https://x.com/a b.js".into()).contains("script_url"));
+        assert!(check(|c| c.script_url = "https://x.com/a'.js".into()).contains("script_url"));
+        assert!(check(|c| c.script_url = "https://x.com/a\\.js".into()).contains("script_url"));
+        assert!(check(|c| c.script_url = "https://x.com/<a>.js".into()).contains("script_url"));
         // With consent off, the category is not used.
         let mut c = MetaPixelConfig::with_pixel_ids(["123"]);
         c.require_consent = false;

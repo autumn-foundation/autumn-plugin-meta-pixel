@@ -399,6 +399,41 @@ mod tests {
     }
 
     #[test]
+    fn head_carries_each_config_value() {
+        let mut c = config();
+        c.page_view = false;
+        c.history_page_views = false;
+        c.auto_config = false;
+        c.honor_gpc = false;
+        c.script_url = "https://cdn.example.com/fb.js?a=1&b=2".into();
+        let html = MetaPixel::for_request(&c, &granted()).head().into_string();
+        // `&` in the config block is escaped.
+        assert!(html.contains("a=1\\u0026b=2"), "{html}");
+        let start = html.find('{').unwrap();
+        let end = html.find("</script>").unwrap();
+        let cfg: serde_json::Value = serde_json::from_str(&html[start..end]).unwrap();
+        assert_eq!(
+            cfg,
+            serde_json::json!({
+                "pixelIds": ["111", "222"],
+                "pageView": false,
+                "historyPageViews": false,
+                "autoConfig": false,
+                "honorGpc": false,
+                "scriptUrl": "https://cdn.example.com/fb.js?a=1&b=2"
+            })
+        );
+    }
+
+    #[test]
+    fn consent_uses_the_configured_policy_version() {
+        let mut c = config();
+        c.consent_policy_version = 2;
+        assert!(MetaPixel::for_request(&c, &consent_headers("marketing", 2)).is_active());
+        assert!(!MetaPixel::for_request(&c, &consent_headers("marketing", 1)).is_active());
+    }
+
+    #[test]
     fn noscript_has_hidden_image_per_pixel() {
         let html = on().noscript().into_string();
         assert_eq!(
@@ -437,6 +472,20 @@ mod tests {
         assert!(!p.head().into_string().is_empty());
         let ev = Event::standard(StandardEvent::Lead);
         assert!(!p.track(&ev).into_string().is_empty());
+    }
+
+    #[test]
+    fn hx_request_false_is_not_htmx() {
+        let mut h = granted();
+        h.insert("hx-request", HeaderValue::from_static("false"));
+        h.insert("hx-history-restore-request", HeaderValue::from_static("no"));
+        let p = MetaPixel::for_request(&config(), &h);
+        assert!(!p.noscript().into_string().is_empty());
+        assert!(
+            !p.track(&Event::standard(StandardEvent::Lead))
+                .into_string()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -536,6 +585,18 @@ mod tests {
             serde_json::json!({ HX_EVENT: { "events": [ev.to_json()] } })
         );
         assert_eq!(p.hx_trigger_value(&[]), None);
+    }
+
+    proptest::proptest! {
+        /// `ascii_json` gives visible ASCII and keeps the JSON value.
+        #[test]
+        fn ascii_json_is_visible_ascii(s in proptest::prelude::any::<String>()) {
+            let raw = serde_json::Value::String(s.clone()).to_string();
+            let out = ascii_json(&raw);
+            proptest::prop_assert!(out.bytes().all(|b| (0x20..0x7f).contains(&b)), "{}", out);
+            let back: serde_json::Value = serde_json::from_str(&out).unwrap();
+            proptest::prop_assert_eq!(back, serde_json::Value::String(s));
+        }
     }
 
     #[test]

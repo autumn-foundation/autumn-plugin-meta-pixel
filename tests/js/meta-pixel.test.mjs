@@ -59,7 +59,7 @@ class El {
   }
 }
 
-function makeEnv({ config, gpc, body = [], fbq } = {}) {
+function makeEnv({ config, gpc, body = [], fbq, preset = {} } = {}) {
   const listeners = {};
   const options = {};
   const head = new El('head');
@@ -96,6 +96,7 @@ function makeEnv({ config, gpc, body = [], fbq } = {}) {
   };
   const window = { document, navigator: { globalPrivacyControl: gpc }, console: { warn() {} } };
   if (fbq) window.fbq = fbq;
+  Object.assign(window, preset);
   window.window = window;
   const ctx = vm.createContext(window);
   const run = () => vm.runInContext(LOADER, ctx);
@@ -357,4 +358,57 @@ test('a DOM element named fbq does not stop the loader', () => {
   assert.equal(typeof env.window.fbq, 'function');
   assert.equal(env.injected().length, 1);
   assert.deepEqual(env.calls(), [['init', '111'], ['trackSingle', '111', 'PageView']]);
+});
+
+test('contract: fixture events give the fixture fbq calls', () => {
+  const fixture = JSON.parse(readFileSync(new URL('../fixtures/events.json', import.meta.url), 'utf8'));
+  for (const c of fixture.cases) {
+    const env = makeEnv({ config: { ...CONFIG, pixelIds: fixture.pixelIds }, body: [eventBlock(c.event)] });
+    assert.deepEqual(env.calls().slice(2 * fixture.pixelIds.length), c.calls, c.id);
+  }
+});
+
+test('custom scriptUrl is the injected src', () => {
+  const env = makeEnv({ config: { ...CONFIG, scriptUrl: 'https://cdn.example.com/fb.js' } });
+  assert.equal(env.injected()[0].src, 'https://cdn.example.com/fb.js');
+});
+
+test('a new block that is already done (history snapshot) does not fire', () => {
+  const block = eventBlock({ name: 'Lead', custom: false, params: {} });
+  block.setAttribute('data-autumn-meta-pixel-done', '');
+  const env = makeEnv({ config: { ...CONFIG, pixelIds: ['111'] }, body: [block] });
+  assert.equal(env.calls().length, 2);
+});
+
+test('an element named autumnMetaPixel does not stop the loader', () => {
+  const seen = [];
+  const fbq = (...args) => seen.push(args[0]);
+  const env = makeEnv({ config: { ...CONFIG, pixelIds: ['111'] }, fbq, preset: { autumnMetaPixel: new El('a') } });
+  assert.deepEqual(seen, ['init', 'trackSingle']);
+  assert.equal(typeof env.window.autumnMetaPixel.track, 'function');
+});
+
+test('a second revoke does nothing', () => {
+  const env = makeEnv({ config: { ...CONFIG, pixelIds: ['111'] } });
+  env.dispatch('autumn:meta-pixel-revoke', {});
+  env.dispatch('autumn:meta-pixel-revoke', {});
+  assert.equal(env.calls().filter((c) => c[0] === 'consent').length, 1);
+});
+
+test('only string pixel IDs count', () => {
+  const env = makeEnv({ config: { ...CONFIG, pixelIds: [7, '111', null] } });
+  assert.deepEqual(env.calls(), [['init', '111'], ['trackSingle', '111', 'PageView']]);
+  const none = makeEnv({ config: { ...CONFIG, pixelIds: [7] } });
+  assert.equal(none.window.fbq, undefined);
+});
+
+test('empty names and array params', () => {
+  const env = makeEnv({
+    config: { ...CONFIG, pixelIds: ['111'] },
+    body: [
+      eventBlock({ name: '', custom: false, params: {} }),
+      eventBlock({ name: 'Lead', custom: false, params: [1, 2] }),
+    ],
+  });
+  assert.deepEqual(env.calls().slice(2), [['trackSingle', '111', 'Lead', {}]]);
 });
