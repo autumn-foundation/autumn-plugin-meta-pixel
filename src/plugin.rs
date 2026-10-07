@@ -11,7 +11,7 @@ use autumn_web::{AppState, AutumnError};
 
 use crate::assets::ASSETS;
 use crate::config::{CspCheck, MetaPixelConfig, SECTION};
-use crate::csp::{has_strict_dynamic, missing_sources, with_meta_pixel_sources};
+use crate::csp::{has_strict_dynamic, has_trusted_types, missing_sources, with_meta_pixel_sources};
 use crate::error::MetaPixelError;
 use crate::pixel::Runtime;
 
@@ -30,13 +30,17 @@ pub const PLUGIN_NAME: &str = "autumn-plugin-meta-pixel";
 #[derive(Debug, Clone, Default)]
 pub struct MetaPixelPlugin {
     config: Option<MetaPixelConfig>,
+    policy_version: Option<u32>,
 }
 
 impl MetaPixelPlugin {
     /// Makes the plugin. It reads `[meta_pixel]` at startup.
     #[must_use]
     pub const fn new() -> Self {
-        Self { config: None }
+        Self {
+            config: None,
+            policy_version: None,
+        }
     }
 
     /// Makes the plugin with this config. It reads no files.
@@ -44,7 +48,17 @@ impl MetaPixelPlugin {
     pub const fn with_config(config: MetaPixelConfig) -> Self {
         Self {
             config: Some(config),
+            policy_version: None,
         }
+    }
+
+    /// Uses the app's cookie policy version, not `consent_policy_version`
+    /// in config. Pass the same constant that the app gives to
+    /// `Consent::allows`, so a policy change closes the gate.
+    #[must_use]
+    pub const fn consent_policy_version(mut self, version: u32) -> Self {
+        self.policy_version = Some(version);
+        self
     }
 
     /// Loads and checks the config, then shares it with the
@@ -56,11 +70,14 @@ impl MetaPixelPlugin {
     /// [`MetaPixelError::Csp`] when the CSP blocks the pixel and
     /// `csp_check = "error"`.
     pub fn start(self, state: &AppState) -> Result<(), MetaPixelError> {
-        let config = match self.config {
+        let mut config = match self.config {
             Some(c) => c,
             // autumn sets the state profile from the config; "default" means none.
             None => MetaPixelConfig::load(Some(state.profile()).filter(|p| *p != "default"))?,
         };
+        if let Some(version) = self.policy_version {
+            config.consent_policy_version = version;
+        }
         config.validate()?;
         let on = config.enabled && !config.pixel_ids.is_empty();
         if config.enabled && config.pixel_ids.is_empty() {
@@ -92,7 +109,8 @@ fn check_csp(config: &MetaPixelConfig, app: &AutumnConfig) -> Result<(), MetaPix
         .ok_or_else(|| MetaPixelError::Config("script_url has no https origin".to_owned()))?;
     let gaps = missing_sources(csp, &origin);
     let strict = has_strict_dynamic(csp);
-    if gaps.is_empty() && !strict {
+    let trusted_types = has_trusted_types(csp);
+    if gaps.is_empty() && !strict && !trusted_types {
         return Ok(());
     }
     let mut problems: Vec<String> = gaps.iter().map(ToString::to_string).collect();
@@ -103,20 +121,29 @@ fn check_csp(config: &MetaPixelConfig, app: &AutumnConfig) -> Result<(), MetaPix
                 .to_owned(),
         );
     }
+    if trusted_types {
+        problems.push(
+            "the policy has require-trusted-types-for, so the browser blocks the loader; \
+             remove it, or set csp_check = \"off\" and load the pixel yourself"
+                .to_owned(),
+        );
+    }
     let mut message = format!(
         "the Content-Security-Policy blocks the pixel: {}.",
         problems.join("; ")
     );
     if !gaps.is_empty() {
         let fixed = toml::Value::String(with_meta_pixel_sources(csp, &origin));
-        // Writing to a `String` cannot fail.
+        // A write to a `String` cannot fail.
         let _ = write!(
             message,
             " Set this in autumn.toml:\n[security.headers]\ncontent_security_policy = {fixed}"
         );
         if headers.csp_nonce.enabled {
             message.push_str(
-                "\nNote: an explicit content_security_policy turns off the automatic nonce.",
+                "\nNote: an explicit content_security_policy turns off the automatic nonce. \
+                 Then inline scripts with a CspNonce do not run, and style-src goes back to \
+                 'unsafe-inline'. Add your own nonce sources if you need them.",
             );
         }
     }
@@ -210,6 +237,31 @@ mod tests {
             "script-src 'self' 'strict-dynamic' https://connect.facebook.net; img-src *; connect-src *".into();
         let err = check_csp(&cfg(), &app).unwrap_err().to_string();
         assert!(err.contains("strict-dynamic"), "{err}");
+    }
+
+    #[test]
+    fn trusted_types_fails_with_a_reason() {
+        let mut app = AutumnConfig::default();
+        app.security.headers.content_security_policy =
+            "default-src 'self' https:; require-trusted-types-for 'script'".into();
+        let err = check_csp(&cfg(), &app).unwrap_err().to_string();
+        assert!(err.contains("require-trusted-types-for"), "{err}");
+    }
+
+    #[test]
+    fn nonce_note_names_the_cost() {
+        let mut app = AutumnConfig::default();
+        app.security.headers.csp_nonce.enabled = true;
+        let err = check_csp(&cfg(), &app).unwrap_err().to_string();
+        assert!(err.contains("CspNonce"), "{err}");
+        assert!(err.contains("'unsafe-inline'"), "{err}");
+    }
+
+    #[test]
+    fn consent_policy_version_builder_wins_over_config() {
+        let p = MetaPixelPlugin::with_config(cfg()).consent_policy_version(3);
+        assert_eq!(p.config.as_ref().unwrap().consent_policy_version, 1);
+        assert_eq!(p.policy_version, Some(3));
     }
 
     #[test]

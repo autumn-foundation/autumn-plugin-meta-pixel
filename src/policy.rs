@@ -9,14 +9,15 @@ pub const MAX_EVENT_NAME_LEN: usize = 50;
 
 /// Escapes JSON text for a `<script type="application/json">` block.
 ///
-/// Gives `<`, `>`, and `&` for `<`, `>`, and `&`. Other
+/// Replaces `<`, `>`, and `&` with `\u003c`, `\u003e`, and `\u0026`. Other
 /// characters stay. These bytes occur in JSON only inside strings, so the
 /// JSON value does not change. The output has no `<`, so it cannot close
 /// the block.
 #[must_use]
 pub fn escape_json_for_html(json: &str) -> String {
     // Per char, not per byte: `<`, `>`, `&` are ASCII, and a UTF-8
-    // multi-byte sequence has no ASCII byte. So this is `spec_escape`.
+    // multi-byte sequence has no ASCII byte. So this function agrees
+    // with `spec_escape` in `verus/policy.rs`.
     let mut out = String::with_capacity(json.len());
     for c in json.chars() {
         match c {
@@ -66,7 +67,7 @@ pub const fn is_valid_event_name(name: &str) -> bool {
 /// Inputs to the load decision for one request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[allow(clippy::struct_excessive_bools)] // Each field is one independent input.
-pub struct Gate {
+pub(crate) struct Gate {
     /// `enabled` in config.
     pub enabled: bool,
     /// One or more pixel IDs are set.
@@ -83,7 +84,7 @@ pub struct Gate {
 
 /// Returns `true` when the page gets the pixel.
 #[must_use]
-pub const fn active(gate: &Gate) -> bool {
+pub(crate) const fn active(gate: Gate) -> bool {
     gate.enabled
         && gate.has_pixels
         && (!gate.require_consent || gate.consent_granted)
@@ -149,29 +150,29 @@ mod tests {
 
     #[test]
     fn gate_cases() {
-        assert!(active(&on()));
-        assert!(!active(&Gate {
+        assert!(active(on()));
+        assert!(!active(Gate {
             enabled: false,
             ..on()
         }));
-        assert!(!active(&Gate {
+        assert!(!active(Gate {
             has_pixels: false,
             ..on()
         }));
-        assert!(!active(&Gate {
+        assert!(!active(Gate {
             consent_granted: false,
             ..on()
         }));
-        assert!(active(&Gate {
+        assert!(active(Gate {
             require_consent: false,
             consent_granted: false,
             ..on()
         }));
-        assert!(!active(&Gate {
+        assert!(!active(Gate {
             gpc_signal: true,
             ..on()
         }));
-        assert!(active(&Gate {
+        assert!(active(Gate {
             honor_gpc: false,
             gpc_signal: true,
             ..on()
@@ -229,7 +230,7 @@ mod tests {
         /// Same as the gate lemmas.
         #[test]
         fn gate_invariants(g in any_gate()) {
-            let a = active(&g);
+            let a = active(g);
             if a {
                 prop_assert!(g.enabled && g.has_pixels);
             }
@@ -241,7 +242,7 @@ mod tests {
             }
             if a {
                 let more = Gate { consent_granted: true, ..g };
-                prop_assert!(active(&more));
+                prop_assert!(active(more));
             }
         }
     }

@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -30,6 +37,22 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets -- -D warnings
+      - name: Rustdoc
+        run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  msrv:
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.88.0
+      - uses: Swatinem/rust-cache@v2
+      # `+1.88.0` wins over rust-toolchain.toml.
+      - run: cargo +1.88.0 check --all-targets
 
   test:
     needs: clippy
@@ -39,7 +62,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.98.1
-          components: llvm-tools-preview
+          components: llvm-tools
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Test with coverage (fail under 85% lines)
@@ -87,11 +110,14 @@ jobs:
       VERUS_REV: 2c9bf54cfa6391ee3769f23d8d173b96a0b70560
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/cache@v4
+      - id: cache
+        uses: actions/cache@v4
         with:
-          path: verus-src/source/target-verus
-          key: verus-${{ env.VERUS_REV }}
+          path: |
+            verus-src
+          key: verus-${{ env.VERUS_REV }}-z3-4.16.0.0
       - name: Build Verus
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           set -eu
           mkdir -p verus-src && cd verus-src
@@ -105,6 +131,9 @@ jobs:
           cd source
           rustup toolchain install
           bash -c 'source ../tools/activate && vargo build --release'
+      - name: Install the Verus toolchain
+        if: steps.cache.outputs.cache-hit == 'true'
+        run: cd verus-src/source && rustup toolchain install
       - name: Verify policy spec
         run: |
           VERUS_Z3_PATH="$PWD/verus-src/source/z3" \

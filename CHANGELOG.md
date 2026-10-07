@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0
+## 0.1.0 (unreleased)
 
 - First release for autumn-web 0.8.
 - `MetaPixelPlugin`: loader served through the `PluginAssets` seam (hashed URL, SRI).
@@ -8,3 +8,5 @@
 - Consent gate (`autumn_web::consent`), Global Privacy Control, off switch.
 - Typed standard and custom events, `eventID`, single-pixel target.
 - Startup checks for config and Content-Security-Policy.
+- `REVOKE_HX_TRIGGER` stops a running pixel after a consent withdrawal.
+- The loader sends `trackSingle` to each configured pixel only.

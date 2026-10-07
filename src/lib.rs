@@ -22,5 +22,7 @@ pub mod policy;
 pub use config::{CspCheck, MetaPixelConfig};
 pub use error::MetaPixelError;
 pub use event::{Content, Event, StandardEvent};
-pub use pixel::{CLICK_ATTR, CONFIG_ELEMENT_ID, EVENT_ATTR, HX_EVENT, MetaPixel};
+pub use pixel::{
+    CLICK_ATTR, CONFIG_ELEMENT_ID, EVENT_ATTR, HX_EVENT, MetaPixel, REVOKE_HX_TRIGGER,
+};
 pub use plugin::{MetaPixelPlugin, PLUGIN_NAME};

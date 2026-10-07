@@ -13,7 +13,9 @@
 //! Open `/`, then `/accept` to give consent. `tests/e2e/browser.mjs` drives
 //! this app in Chromium.
 
-use autumn_plugin_meta_pixel::{Content, Event, MetaPixel, MetaPixelPlugin, StandardEvent};
+use autumn_plugin_meta_pixel::{
+    Content, Event, MetaPixel, MetaPixelPlugin, REVOKE_HX_TRIGGER, StandardEvent,
+};
 use autumn_web::assets::asset_url;
 use autumn_web::prelude::*;
 use autumn_web::reexports::axum::response::{AppendHeaders, Redirect};
@@ -29,6 +31,7 @@ async fn index(pixel: MetaPixel) -> Markup {
         .value(25.0)
         .currency("EUR");
     let contact = Event::standard(StandardEvent::Contact);
+    let lead = Event::standard(StandardEvent::Lead);
     html! {
         (maud::DOCTYPE)
         html lang="en" {
@@ -44,14 +47,19 @@ async fn index(pixel: MetaPixel) -> Markup {
                 h1 { "Blue mug" }
                 button id="contact" data-meta-pixel=[pixel.click_attr(&contact)] { "Contact us" }
                 button id="add" hx-get="/cart" hx-target="#cart" { "Add to cart" }
+                // `consume` stops the click event. The pixel still sees it.
+                button id="ask" hx-get="/cart" hx-target="#cart" hx-trigger="click consume"
+                    data-meta-pixel=[pixel.click_attr(&lead)] { "Ask" }
                 div id="cart" {}
-                a href="/thanks" { "Buy" }
+                a id="buy" href="/thanks" hx-boost="true" { "Buy" }
+                button id="withdraw" hx-get="/withdraw" hx-target="#cart" { "Withdraw consent" }
             }
         }
     }
 }
 
-/// An htmx fragment. The event fires from the `HX-Trigger` header.
+/// An htmx fragment. `AddToCart` fires from the `HX-Trigger` header.
+/// `CartOpened` fires from a data block.
 #[get("/cart")]
 async fn cart(pixel: MetaPixel) -> impl IntoResponse {
     let add = Event::standard(StandardEvent::AddToCart)
@@ -63,10 +71,12 @@ async fn cart(pixel: MetaPixel) -> impl IntoResponse {
         .map(|v| ("hx-trigger", v))
         .into_iter()
         .collect();
-    let lead = Event::custom("CartOpened").unwrap_or_else(|_| Event::from(StandardEvent::Lead));
+    // A literal name. `Event::custom` checks it at run time.
+    #[allow(clippy::expect_used)]
+    let opened = Event::custom("CartOpened").expect("valid event name");
     (
         AppendHeaders(header),
-        html! { p { "1 item" } (pixel.track(&lead)) },
+        html! { p { "1 item" } (pixel.track(&opened)) },
     )
 }
 
@@ -93,10 +103,24 @@ async fn accept() -> impl IntoResponse {
     (AppendHeaders([("set-cookie", cookie)]), Redirect::to("/"))
 }
 
+/// Demo only: records "reject non-essential" and stops the pixel that runs
+/// in the page (`hx-boost` keeps it in memory).
+#[get("/withdraw")]
+async fn withdraw() -> impl IntoResponse {
+    let cookie = autumn_web::consent::reject_non_essential_cookie(POLICY_VERSION);
+    (
+        AppendHeaders([
+            ("set-cookie", cookie),
+            ("hx-trigger", REVOKE_HX_TRIGGER.to_owned()),
+        ]),
+        html! { p { "Consent withdrawn" } },
+    )
+}
+
 #[autumn_web::main]
 async fn main() {
     autumn_web::app()
-        .routes(routes![index, cart, thanks, accept])
+        .routes(routes![index, cart, thanks, accept, withdraw])
         .plugin(MetaPixelPlugin::new())
         .run()
         .await;

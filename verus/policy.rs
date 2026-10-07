@@ -40,7 +40,7 @@ pub open spec fn spec_html_safe(s: Seq<u8>) -> bool {
     forall|i: int| 0 <= i < s.len() ==> !spec_html_special(#[trigger] s[i])
 }
 
-/// Spec: `<`, `>`, `&` for the special bytes. Other bytes stay.
+/// Spec: `\u003c`, `\u003e`, `\u0026` for the special bytes. Other bytes stay.
 pub open spec fn spec_escape_byte(b: u8) -> Seq<u8> {
     if b == LT {
         seq![0x5cu8, 0x75u8, 0x30u8, 0x30u8, 0x33u8, 0x63u8]
@@ -310,9 +310,9 @@ pub open spec fn spec_active(g: Gate) -> bool {
 }
 
 /// Returns `true` when the page gets the pixel.
-pub fn active(g: &Gate) -> (r: bool)
+pub fn active(g: Gate) -> (r: bool)
     ensures
-        r == spec_active(*g),
+        r == spec_active(g),
 {
     g.enabled && g.has_pixels && (!g.require_consent || g.consent_granted) && !(g.honor_gpc
         && g.gpc_signal)

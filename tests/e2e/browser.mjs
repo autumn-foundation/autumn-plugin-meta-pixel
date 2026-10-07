@@ -82,6 +82,15 @@ try {
     route.fulfill({ status: 200, body: '' });
   });
   const calls = async () => page.evaluate(() => window.__calls || null);
+  // Waits until event `name` has fired `n` times. Gives all calls.
+  const waitEvent = async (name, n = 1) => {
+    await page.waitForFunction(
+      ([k, m]) => (window.__calls || []).filter((x) => x[2] === k).length >= m,
+      [name, n],
+      { timeout: 10000 },
+    );
+    return calls();
+  };
   const waitCalls = async (n) => {
     await page.waitForFunction((k) => (window.__calls || []).length >= k, n, { timeout: 10000 });
     return calls();
@@ -99,39 +108,80 @@ try {
   let c = await waitCalls(3);
   assert.deepEqual(c.slice(0, 3), [
     ['init', PIXEL],
-    ['track', 'PageView'],
-    ['track', 'ViewContent', {
+    ['trackSingle', PIXEL, 'PageView'],
+    ['trackSingle', PIXEL, 'ViewContent', {
       content_ids: ['sku-1'], content_type: 'product', value: 25, currency: 'EUR',
     }],
   ]);
   const loader = page.locator('script[src^="/static/_plugins/meta-pixel/meta-pixel."]');
   assert.equal(await loader.count(), 1);
   assert.match(await loader.getAttribute('integrity'), /^sha384-/);
-  assert.equal(await page.locator('noscript').count(), 1);
+  // The loader removes the noscript image when JavaScript runs.
+  assert.equal(await page.locator('noscript').count(), 0);
   assert.equal(await page.evaluate(() => window.__disablePushState), false);
 
   // 3. Click: Contact.
   await page.click('#contact');
   c = await waitCalls(4);
-  assert.deepEqual(c[3], ['track', 'Contact', {}]);
+  assert.deepEqual(c[3], ['trackSingle', PIXEL, 'Contact', {}]);
 
   // 4. htmx: AddToCart from HX-Trigger, CartOpened from the swapped block.
   await page.click('#add');
   c = await waitCalls(6);
-  const names = c.slice(4).map((x) => x[1]).sort();
+  const names = c.slice(4).map((x) => x[2]).sort();
   assert.deepEqual(names, ['AddToCart', 'CartOpened']);
-  assert.ok(c.some((x) => x[0] === 'trackCustom' && x[1] === 'CartOpened'));
-  // One more swap must not fire the old block again.
+  assert.ok(c.some((x) => x[0] === 'trackSingleCustom' && x[2] === 'CartOpened'));
+  // One more swap is a new response, so its block fires once more.
   await page.click('#add');
   c = await waitCalls(8);
-  assert.equal(c.filter((x) => x[1] === 'CartOpened').length, 2);
+  assert.equal(c.filter((x) => x[2] === 'CartOpened').length, 2);
 
-  // 5. Purchase with eventID.
+  // 5. A click with hx-trigger "consume" (stopPropagation) still fires.
+  await page.click('#ask');
+  await waitEvent('Lead');
+  c = await waitEvent('CartOpened', 3);
+
+  // 6. hx-boost to /thanks: Purchase with eventID fires once, no noscript hit.
+  await page.click('#buy');
+  await page.waitForURL(base + '/thanks');
+  c = await waitEvent('Purchase');
+  await page.waitForTimeout(300);
+  c = await calls();
+  const purchases = c.filter((x) => x[2] === 'Purchase');
+  assert.deepEqual(purchases, [
+    ['trackSingle', PIXEL, 'Purchase', { value: 25, currency: 'EUR' }, { eventID: 'order-1001' }],
+  ]);
+
+  // 7. Back: htmx restores the page from its history cache. No event fires again.
+  const settled = c.length;
+  await page.goBack();
+  await page.waitForURL(base + '/');
+  await page.waitForTimeout(500);
+  c = await calls();
+  assert.equal(c.filter((x) => x[2] === 'ViewContent').length, 1, JSON.stringify(c.slice(settled)));
+  assert.ok(!metaRequests.some((u) => u.includes('noscript=1')), metaRequests.join('\n'));
+
+  // 8. Withdraw consent: the loader revokes and sends no more events.
+  await page.click('#withdraw');
+  await page.waitForFunction(() => (window.__calls || []).some((x) => x[0] === 'consent'));
+  c = await calls();
+  assert.deepEqual(c.at(-1), ['consent', 'revoke']);
+  const afterRevoke = c.length;
+  await page.click('#contact');
+  await page.waitForTimeout(300);
+  assert.equal((await calls()).length, afterRevoke);
+  // The next full load has no pixel.
+  await page.goto(base + '/');
+  assert.equal(await page.locator('#autumn-meta-pixel-config').count(), 0);
+  await page.goto(base + '/accept');
+  await waitCalls(3);
+
+  // 9. A full load of /thanks: Purchase with eventID.
   await page.goto(base + '/thanks');
   c = await waitCalls(3);
-  assert.deepEqual(c[2], ['track', 'Purchase', { value: 25, currency: 'EUR' }, { eventID: 'order-1001' }]);
+  assert.deepEqual(c[2], ['trackSingle', PIXEL, 'Purchase', { value: 25, currency: 'EUR' }, { eventID: 'order-1001' }]);
 
-  // 6. GPC request: the server sends no pixel.
+  // 10. GPC request: the server sends no pixel.
   const gpcPage = await browser.newPage({ extraHTTPHeaders: { 'Sec-GPC': '1' } });
   await gpcPage.context().addCookies(await page.context().cookies());
   await gpcPage.goto(base + '/');

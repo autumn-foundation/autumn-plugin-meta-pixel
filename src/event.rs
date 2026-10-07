@@ -57,7 +57,7 @@ pub enum StandardEvent {
 
 impl StandardEvent {
     /// All standard events.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: &'static [Self] = &[
         Self::AddPaymentInfo,
         Self::AddToCart,
         Self::AddToWishlist,
@@ -112,12 +112,14 @@ impl std::fmt::Display for StandardEvent {
 
 /// One item in `contents`.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Content {
     /// Product ID (SKU).
     pub id: String,
     /// Number of items.
     pub quantity: u32,
-    /// Price of one item. Omitted when `None` or not finite.
+    /// Price of one item. The JSON does not include it when it is `None` or
+    /// not finite.
     pub item_price: Option<f64>,
 }
 
@@ -198,7 +200,7 @@ impl Event {
     /// A custom event. The loader sends it with `fbq('trackCustom', ...)`.
     ///
     /// # Errors
-    /// Returns [`MetaPixelError::EventName`] when `name` is not 1 to 50 of
+    /// Returns [`MetaPixelError::EventName`] when `name` is not 1 to 50 characters from
     /// `A-Z a-z 0-9 _`.
     pub fn custom(name: &str) -> Result<Self, MetaPixelError> {
         if !is_valid_event_name(name) {
@@ -345,8 +347,8 @@ impl Event {
         self
     }
 
-    /// Sends the event to this pixel only (`trackSingle`). The pixel must be
-    /// in `pixel_ids`, else the event does not render.
+    /// Sends the event to this pixel only. The pixel must be in
+    /// `pixel_ids`. If it is not, the event does not render.
     #[must_use]
     pub fn for_pixel(mut self, pixel_id: impl Into<String>) -> Self {
         self.pixel_id = Some(pixel_id.into());

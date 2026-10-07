@@ -27,6 +27,7 @@ pub const DEFAULT_SCRIPT_URL: &str = "https://connect.facebook.net/en_US/fbevent
 /// What to do when the CSP blocks the pixel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum CspCheck {
     /// Fail the app start. The error gives the fixed CSP.
     #[default]
@@ -159,7 +160,7 @@ impl MetaPixelConfig {
                 continue;
             };
             let path: Vec<String> = path.split("__").map(str::to_ascii_lowercase).collect();
-            // The error names the variable, never the value.
+            // A bad typed value: the error names the variable, not the value.
             let typed = typed_env_value(&schema, &path, &value)
                 .ok_or_else(|| MetaPixelError::Config(format!("{key}: value is not valid")))?;
             insert_path(&mut table, &path, typed);
@@ -172,7 +173,8 @@ impl MetaPixelConfig {
     }
 
     /// Loads config from files in `manifest_dir` (else the current
-    /// directory) and from `env`.
+    /// directory) and from `env`. `profile_names` selects
+    /// `[profile.<name>]` and the first `autumn-<name>.toml` found.
     ///
     /// # Errors
     /// Returns [`MetaPixelError::Config`] for a file that cannot be read or
@@ -203,6 +205,8 @@ impl MetaPixelConfig {
 
     /// Loads config like autumn-web does: `$AUTUMN_MANIFEST_DIR` (else `.`),
     /// the app profile, `.env`, and the process environment.
+    ///
+    /// `profile` is the app profile. `None` reads no profile layers.
     ///
     /// # Errors
     /// Returns [`MetaPixelError::Config`] when loading or validation fails.
@@ -265,7 +269,8 @@ impl MetaPixelConfig {
             .bytes()
             .all(|b| b.is_ascii_graphic() && !matches!(b, b'"' | b'\'' | b'<' | b'>' | b'\\'));
         if !safe || origin_of(url).is_none() {
-            return bad(format!("script_url must be an https URL: {url:?}"));
+            // Do not show the value: a URL can hold a password.
+            return bad("script_url must be an https URL with a host and no quotes".to_owned());
         }
         Ok(())
     }
@@ -345,8 +350,8 @@ fn insert_path(table: &mut toml::Table, path: &[String], value: toml::Value) {
     cur.insert(last.clone(), value);
 }
 
-/// Types an env value like the default value at the same path. A list is a
-/// comma-separated string.
+/// Converts an env value to the type of the default value at the same
+/// path. A list is a comma-separated string.
 fn typed_env_value(schema: &toml::Table, path: &[String], raw: &str) -> Option<toml::Value> {
     let mut node: Option<&toml::Value> = None;
     let mut table = Some(schema);
@@ -356,7 +361,12 @@ fn typed_env_value(schema: &toml::Table, path: &[String], raw: &str) -> Option<t
     }
     match node {
         Some(toml::Value::Integer(_)) => raw.trim().parse().ok().map(toml::Value::Integer),
-        Some(toml::Value::Boolean(_)) => raw.trim().parse().ok().map(toml::Value::Boolean),
+        // Like autumn: `true`/`1` and `false`/`0`, any case.
+        Some(toml::Value::Boolean(_)) => match raw.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" => Some(toml::Value::Boolean(true)),
+            "false" | "0" => Some(toml::Value::Boolean(false)),
+            _ => None,
+        },
         Some(toml::Value::Array(_)) => Some(toml::Value::Array(
             raw.split(',')
                 .map(str::trim)
@@ -435,6 +445,41 @@ mod tests {
         assert!(!c.enabled);
         assert_eq!(c.consent_policy_version, 3);
         assert_eq!(c.csp_check, CspCheck::Off);
+    }
+
+    #[test]
+    fn env_bools_accept_one_and_zero_like_autumn() {
+        let c = MetaPixelConfig::from_layers(
+            None,
+            &[],
+            None,
+            env(&[
+                ("AUTUMN_META_PIXEL__ENABLED", "0"),
+                ("AUTUMN_META_PIXEL__NOSCRIPT", " FALSE "),
+                ("AUTUMN_META_PIXEL__HONOR_GPC", "1"),
+            ]),
+        )
+        .unwrap();
+        assert!(!c.enabled);
+        assert!(!c.noscript);
+        assert!(c.honor_gpc);
+        let c = MetaPixelConfig::from_layers(
+            None,
+            &[],
+            None,
+            env(&[("AUTUMN_META_PIXEL__ENABLED", "True")]),
+        )
+        .unwrap();
+        assert!(c.enabled);
+    }
+
+    #[test]
+    fn script_url_error_does_not_echo_the_value() {
+        let mut c = MetaPixelConfig::with_pixel_ids(["1"]);
+        c.script_url = "https://user:hunter2@cdn.example.com/f.js".into();
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("script_url"), "{err}");
+        assert!(!err.contains("hunter2"), "{err}");
     }
 
     #[test]

@@ -14,7 +14,7 @@ same-origin URLs with SRI.
 
 - Put the loader in `assets/meta-pixel.js`. Serve it with
   `PluginAssets::from_files("meta-pixel", ...)` and `AppBuilder::plugin_assets`.
-- Emit it with `ASSETS.deferred_script_tag`, so the tag has the hashed URL,
+- Render it with `ASSETS.deferred_script_tag`, so the tag has the hashed URL,
   `integrity`, and `crossorigin`.
 - Put config and events in `<script type="application/json">` blocks. The
   browser does not run them, so CSP does not apply. The loader parses them.

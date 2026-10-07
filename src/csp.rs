@@ -9,15 +9,19 @@
 //! | `img-src` | `https://www.facebook.com` | Hits and the `noscript` image. |
 //! | `connect-src` | `https://www.facebook.com` | Hits sent with `fetch` or a beacon. |
 //!
-//! The check is a subset of CSP Level 3. It never reports a pass for a
-//! policy that blocks the pixel. It can report a gap for a policy that is
-//! wider than it can parse; the fix is then harmless.
+//! The check parses a subset of CSP Level 3. A header value can hold a
+//! comma-separated list of policies; each one must allow the pixel.
+//!
+//! The check never reports a pass for a policy that blocks the pixel. It can
+//! report a gap for a policy that it cannot fully parse. Then the fix adds a
+//! source that the policy does not need. This does no harm.
 
 /// Origin of the pixel hits.
 pub const HIT_ORIGIN: &str = "https://www.facebook.com";
 
 /// One source that the policy does not allow.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CspGap {
     /// The directive that needs the source, for example `script-src`.
     pub directive: &'static str,
@@ -32,6 +36,8 @@ impl std::fmt::Display for CspGap {
 }
 
 /// The `scheme://host[:port]` part of an `https` URL, lower case.
+///
+/// `None` when the URL is not `https`, or has a bad host or port.
 #[must_use]
 pub fn origin_of(url: &str) -> Option<String> {
     let lower = url.trim().to_ascii_lowercase();
@@ -56,8 +62,15 @@ struct Directive<'a> {
     text: &'a str,
 }
 
-fn parse(csp: &str) -> Vec<Directive<'_>> {
-    csp.split(';')
+/// The policies of a header value. A comma starts a new policy.
+fn policies(csp: &str) -> impl Iterator<Item = &str> {
+    csp.split(',').map(str::trim).filter(|p| !p.is_empty())
+}
+
+/// The directives of one policy.
+fn parse(policy: &str) -> Vec<Directive<'_>> {
+    policy
+        .split(';')
         .map(str::trim)
         .filter(|d| !d.is_empty())
         .map(|text| {
@@ -104,12 +117,14 @@ fn allows(tokens: &[&str], source: &str) -> bool {
         if source == "'self'" {
             return t == "'self'";
         }
-        t == "https:" || host_source_matches(&t, source)
+        // CSP3: an `http` source also matches the same `https` URL.
+        t == "https:" || t == "http:" || host_source_matches(&t, source)
     })
 }
 
 /// Host-source match for an `https://host[:port]` origin. A source with a
-/// path other than `/`, or with a scheme other than `https`, does not match.
+/// path other than `/`, or with a scheme other than `https` or `http`, does
+/// not match.
 fn host_source_matches(token: &str, origin: &str) -> bool {
     let Some(target) = origin.strip_prefix("https://") else {
         return false;
@@ -119,7 +134,7 @@ fn host_source_matches(token: &str, origin: &str) -> bool {
         return false;
     }
     let rest = match token.split_once("://") {
-        Some(("https", rest)) => rest,
+        Some(("https" | "http", rest)) => rest,
         Some(_) => return false,
         None if token.ends_with(':') => return false,
         None => token,
@@ -129,13 +144,14 @@ fn host_source_matches(token: &str, origin: &str) -> bool {
         return false;
     }
     let (host, port) = authority.split_once(':').unwrap_or((authority, "443"));
-    let host_ok = host
-        .strip_prefix("*.")
-        .map_or(host == target_host, |suffix| {
-            target_host
-                .strip_suffix(suffix)
-                .is_some_and(|head| head.ends_with('.') && head.len() > 1)
-        });
+    let host_ok = host == "*"
+        || host
+            .strip_prefix("*.")
+            .map_or(host == target_host, |suffix| {
+                target_host
+                    .strip_suffix(suffix)
+                    .is_some_and(|head| head.ends_with('.') && head.len() > 1)
+            });
     host_ok && (port == "*" || port == target_port)
 }
 
@@ -145,7 +161,18 @@ fn host_source_matches(token: &str, origin: &str) -> bool {
 /// header, so it allows all.
 #[must_use]
 pub fn missing_sources(csp: &str, script_origin: &str) -> Vec<CspGap> {
-    let dirs = parse(csp);
+    let mut gaps: Vec<CspGap> = Vec::new();
+    for gap in policies(csp).flat_map(|p| policy_gaps(p, script_origin)) {
+        if !gaps.contains(&gap) {
+            gaps.push(gap);
+        }
+    }
+    gaps
+}
+
+/// The gaps of one policy.
+fn policy_gaps(policy: &str, script_origin: &str) -> Vec<CspGap> {
+    let dirs = parse(policy);
     needs(script_origin)
         .into_iter()
         .filter_map(|(order, directive, source)| {
@@ -170,16 +197,37 @@ pub fn missing_sources(csp: &str, script_origin: &str) -> Vec<CspGap> {
 /// cannot fix that.
 #[must_use]
 pub fn has_strict_dynamic(csp: &str) -> bool {
-    let dirs = parse(csp);
-    effective(&dirs, &SCRIPT).is_some_and(|i| {
-        dirs[i]
-            .tokens
+    policies(csp).any(|policy| {
+        let dirs = parse(policy);
+        effective(&dirs, &SCRIPT).is_some_and(|i| {
+            dirs[i]
+                .tokens
+                .iter()
+                .any(|t| t.eq_ignore_ascii_case("'strict-dynamic'"))
+        })
+    })
+}
+
+/// `true` when a policy has `require-trusted-types-for`.
+///
+/// Then the browser blocks the loader when it sets the `src` of the
+/// `fbevents.js` script. [`with_meta_pixel_sources`] cannot fix that.
+#[must_use]
+pub fn has_trusted_types(csp: &str) -> bool {
+    policies(csp).any(|policy| {
+        parse(policy)
             .iter()
-            .any(|t| t.eq_ignore_ascii_case("'strict-dynamic'"))
+            .any(|d| d.name.eq_ignore_ascii_case("require-trusted-types-for"))
     })
 }
 
 /// `csp` with the missing sources added.
+///
+/// A source goes into the directive that applies. When only `default-src`
+/// applies, the fix adds the specific directive. That directive gets the
+/// `default-src` sources and the new source. Other resource types do not
+/// change. The fix removes `'none'` from a directive that gets a source.
+/// Each policy of a comma-separated list gets its own fix.
 ///
 /// ```
 /// use autumn_plugin_meta_pixel::csp::{missing_sources, with_meta_pixel_sources};
@@ -189,17 +237,23 @@ pub fn has_strict_dynamic(csp: &str) -> bool {
 /// assert!(missing_sources(&fixed, origin).is_empty());
 /// assert!(fixed.starts_with("default-src 'self'; script-src 'self' https://connect.facebook.net"));
 /// ```
-///
-/// A source goes into the directive that applies. When only `default-src`
-/// applies, the fix adds the specific directive with the `default-src`
-/// sources plus the new source, so other resource types do not change.
-/// `'none'` goes away from a directive that gets a source.
 #[must_use]
 pub fn with_meta_pixel_sources(csp: &str, script_origin: &str) -> String {
     if missing_sources(csp, script_origin).is_empty() {
         return csp.to_owned();
     }
-    let dirs = parse(csp);
+    policies(csp)
+        .map(|policy| fix_policy(policy, script_origin))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// One policy with its missing sources added.
+fn fix_policy(policy: &str, script_origin: &str) -> String {
+    if policy_gaps(policy, script_origin).is_empty() {
+        return policy.to_owned();
+    }
+    let dirs = parse(policy);
     // Tokens per existing directive, set when the fix changes it.
     let mut changed: Vec<Option<Vec<String>>> = vec![None; dirs.len()];
     // New directives, in the order the fix adds them.
@@ -372,9 +426,9 @@ mod tests {
                 .len(),
             1
         );
-        // `http:` scheme, wrong port, a look-alike host.
+        // Wrong port, a look-alike host, another scheme.
         assert_eq!(
-            gaps("default-src 'self' http://connect.facebook.net https://www.facebook.com").len(),
+            gaps("default-src 'self' ftp://connect.facebook.net https://www.facebook.com").len(),
             1
         );
         assert_eq!(
@@ -395,6 +449,52 @@ mod tests {
             .len(),
             1
         );
+    }
+
+    #[test]
+    fn http_sources_match_https_like_csp3() {
+        assert!(
+            gaps("default-src 'self' http://connect.facebook.net http://www.facebook.com")
+                .is_empty()
+        );
+        assert!(gaps("default-src 'self' http:").is_empty());
+        assert!(gaps("default-src 'self' https://*").is_empty());
+        assert!(gaps("default-src 'self' *").is_empty());
+    }
+
+    #[test]
+    fn each_policy_of_a_comma_list_must_allow_the_pixel() {
+        let csp = format!("script-src 'self' {FB}; img-src *; connect-src *, script-src 'self'");
+        assert_eq!(
+            gaps(&csp),
+            ["script-src does not allow https://connect.facebook.net"]
+        );
+        let fixed = with_meta_pixel_sources(&csp, FB);
+        assert!(gaps(&fixed).is_empty(), "{fixed}");
+        assert_eq!(
+            fixed,
+            format!("script-src 'self' {FB}; img-src *; connect-src *, script-src 'self' {FB}")
+        );
+        // A gap in two policies is one gap.
+        assert_eq!(
+            gaps("script-src 'self', script-src 'self'"),
+            ["script-src does not allow https://connect.facebook.net"]
+        );
+    }
+
+    #[test]
+    fn trusted_types_is_reported() {
+        assert!(has_trusted_types(
+            "default-src *; require-trusted-types-for 'script'"
+        ));
+        assert!(has_trusted_types(
+            "default-src *, REQUIRE-TRUSTED-TYPES-FOR 'script'"
+        ));
+        assert!(!has_trusted_types("default-src *; trusted-types foo"));
+        assert!(!has_trusted_types(AUTUMN_DEFAULT));
+        assert!(has_strict_dynamic(
+            "default-src *, script-src 'strict-dynamic'"
+        ));
     }
 
     #[test]
@@ -454,19 +554,27 @@ mod tests {
             .prop_map(|(name, tokens)| format!("{name} {}", tokens.join(" ")))
     }
 
+    /// One or two policies, comma-separated.
+    fn policy_list() -> impl Strategy<Value = String> {
+        prop::collection::vec(prop::collection::vec(directive(), 0..6), 1..3).prop_map(|ps| {
+            ps.iter()
+                .map(|dirs| dirs.join("; "))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+    }
+
     proptest! {
         /// The fix always closes all gaps.
         #[test]
-        fn fix_closes_all_gaps(dirs in prop::collection::vec(directive(), 0..6)) {
-            let csp = dirs.join("; ");
+        fn fix_closes_all_gaps(csp in policy_list()) {
             let fixed = with_meta_pixel_sources(&csp, FB);
             prop_assert!(missing_sources(&fixed, FB).is_empty(), "{} -> {}", csp, fixed);
         }
 
         /// The fix does not change a policy with no gaps.
         #[test]
-        fn fix_is_identity_without_gaps(dirs in prop::collection::vec(directive(), 0..6)) {
-            let csp = dirs.join("; ");
+        fn fix_is_identity_without_gaps(csp in policy_list()) {
             if missing_sources(&csp, FB).is_empty() {
                 prop_assert_eq!(with_meta_pixel_sources(&csp, FB), csp);
             }
@@ -474,10 +582,9 @@ mod tests {
 
         /// The fix keeps each directive that needs no change.
         #[test]
-        fn fix_keeps_style_and_frame(dirs in prop::collection::vec(directive(), 0..6)) {
-            let csp = dirs.join("; ");
+        fn fix_keeps_style_and_frame(csp in policy_list()) {
             let fixed = with_meta_pixel_sources(&csp, FB);
-            for d in csp.split(';').map(str::trim) {
+            for d in csp.split([';', ',']).map(str::trim) {
                 if d.starts_with("style-src") || d.starts_with("frame-ancestors") {
                     prop_assert!(fixed.contains(d), "{} lost {}", fixed, d);
                 }

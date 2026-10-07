@@ -9,12 +9,12 @@ repository = "https://github.com/autumn-foundation/autumn-plugin-meta-pixel"
 readme = "README.md"
 keywords = ["autumn", "meta-pixel", "facebook-pixel", "analytics", "plugin"]
 categories = ["web-programming"]
-exclude = [".github/", ".githooks/", "docs/", "verus/", "tests/js/", "tests/e2e/", "CLAUDE.md", "clippy.toml", "proptest-regressions/"]
+exclude = [".github/", ".githooks/", "docs/", "verus/", "tests/js/", "tests/e2e/", "rust-toolchain.toml", "CLAUDE.md", "clippy.toml", "proptest-regressions/"]
 
 [dependencies]
 # `maud` gives the `PluginAssets` tag helpers. The host app picks the rest.
 autumn-web = { version = "0.8.0", default-features = false, features = ["maud"] }
-# `maud::html!` expands to `::maud::...` paths. Same major as autumn-web.
+# `maud::html!` expands to `::maud::...` paths. Use the maud version of autumn-web.
 maud = "0.27"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

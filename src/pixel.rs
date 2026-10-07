@@ -26,8 +26,16 @@ pub const EVENT_ATTR: &str = "data-autumn-meta-pixel-event";
 pub const CLICK_ATTR: &str = "data-meta-pixel";
 /// Name of the htmx event that `HX-Trigger` fires.
 pub const HX_EVENT: &str = "autumn:meta-pixel";
+/// `HX-Trigger` value that stops a pixel that runs in the page.
+///
+/// Send it with the response that records a consent withdrawal. With
+/// `hx-boost`, the page and `fbevents.js` stay in memory across requests.
+/// The loader then calls `fbq('consent', 'revoke')`, stops `pushState`
+/// page views, and sends no more events. A full page load (`HX-Refresh`)
+/// also works.
+pub const REVOKE_HX_TRIGGER: &str = "autumn:meta-pixel-revoke";
 
-/// Config shared by all requests. Made once at startup.
+/// Config shared by all requests. The plugin makes it once at startup.
 #[derive(Debug)]
 pub(crate) struct Runtime {
     config: MetaPixelConfig,
@@ -71,13 +79,21 @@ impl Runtime {
 pub struct MetaPixel {
     /// `Some` only when the pixel is on for this request.
     runtime: Option<Arc<Runtime>>,
+    /// `HX-Request: true`. htmx parses the response with scripting off.
+    htmx: bool,
+    /// `HX-History-Restore-Request: true`. The page events fired before.
+    history_restore: bool,
 }
 
 impl MetaPixel {
     /// A pixel that is off. All markup is empty.
     #[must_use]
     pub const fn off() -> Self {
-        Self { runtime: None }
+        Self {
+            runtime: None,
+            htmx: false,
+            history_restore: false,
+        }
     }
 
     /// The pixel for a request with these headers. The extractor does the
@@ -97,7 +113,13 @@ impl MetaPixel {
     /// assert!(pixel.head().into_string().contains("autumn-meta-pixel-config"));
     /// ```
     #[must_use]
+    ///
+    /// A config that fails [`MetaPixelConfig::validate`] gives an off pixel.
     pub fn for_request(config: &MetaPixelConfig, headers: &HeaderMap) -> Self {
+        if let Err(e) = config.validate() {
+            tracing::warn!("meta_pixel: {e}; the pixel is off");
+            return Self::off();
+        }
         Self::decide(Arc::new(Runtime::new(config.clone())), headers)
     }
 
@@ -116,7 +138,9 @@ impl MetaPixel {
                 .is_some_and(|v| v.as_bytes().trim_ascii() == b"1"),
         };
         Self {
-            runtime: active(&gate).then_some(runtime),
+            runtime: active(gate).then_some(runtime),
+            htmx: is_true(headers, "hx-request"),
+            history_restore: is_true(headers, "hx-history-restore-request"),
         }
     }
 
@@ -140,17 +164,21 @@ impl MetaPixel {
 
     /// Put this at the start of `<body>`: a hidden `PageView` image for
     /// each pixel, for browsers with no JavaScript.
+    ///
+    /// Empty for an htmx request (`HX-Request: true`): htmx parses the
+    /// response with scripting off, so the image would load.
     #[must_use]
     pub fn noscript(&self) -> Markup {
         let Some(rt) = &self.runtime else {
             return html! {};
         };
         let c = &rt.config;
-        if !(c.noscript && c.page_view) {
+        // An htmx response is parsed with scripting off: the image would load.
+        if !(c.noscript && c.page_view) || self.htmx {
             return html! {};
         }
         html! {
-            noscript {
+            noscript data-autumn-meta-pixel {
                 @for id in &c.pixel_ids {
                     img height="1" width="1" alt="" hidden
                         src=(format!("{HIT_ORIGIN}/tr?id={id}&ev=PageView&noscript=1"));
@@ -161,8 +189,14 @@ impl MetaPixel {
 
     /// An event data block. The loader fires it once, at page load or
     /// after an htmx swap.
+    ///
+    /// Empty for an htmx history restore (`HX-History-Restore-Request`):
+    /// the events fired on the first visit.
     #[must_use]
     pub fn track(&self, event: &Event) -> Markup {
+        if self.history_restore {
+            return html! {};
+        }
         let Some(json) = self.event_json(event) else {
             return html! {};
         };
@@ -206,15 +240,26 @@ impl MetaPixel {
         if let Some(id) = event.pixel_id()
             && !rt.config.pixel_ids.iter().any(|p| p == id)
         {
-            tracing::warn!(
-                pixel_id = id,
-                event = event.name(),
-                "meta_pixel: event targets a pixel that is not in pixel_ids; not sent"
-            );
+            // Once: a bad target in a template must not fill the log.
+            static WARNED: Once = Once::new();
+            WARNED.call_once(|| {
+                tracing::warn!(
+                    pixel_id = id,
+                    event = event.name(),
+                    "meta_pixel: an event targets a pixel that is not in pixel_ids; not sent"
+                );
+            });
             return None;
         }
         Some(event.to_json())
     }
+}
+
+/// `true` when header `name` is `true`.
+fn is_true(headers: &HeaderMap, name: &str) -> bool {
+    headers
+        .get(name)
+        .is_some_and(|v| v.as_bytes().trim_ascii().eq_ignore_ascii_case(b"true"))
 }
 
 /// JSON text with each character outside `0x20..0x7f` as a `\uXXXX`
@@ -228,7 +273,7 @@ fn ascii_json(json: &str) -> String {
             out.push(c);
         } else {
             for unit in c.encode_utf16(&mut units) {
-                // Writing to a `String` cannot fail.
+                // A write to a `String` cannot fail.
                 let _ = write!(out, "\\u{unit:04x}");
             }
         }
@@ -358,7 +403,7 @@ mod tests {
         let html = on().noscript().into_string();
         assert_eq!(
             html,
-            "<noscript>\
+            "<noscript data-autumn-meta-pixel>\
              <img height=\"1\" width=\"1\" alt=\"\" hidden src=\"https://www.facebook.com/tr?id=111&amp;ev=PageView&amp;noscript=1\">\
              <img height=\"1\" width=\"1\" alt=\"\" hidden src=\"https://www.facebook.com/tr?id=222&amp;ev=PageView&amp;noscript=1\">\
              </noscript>"
@@ -379,6 +424,55 @@ mod tests {
                 .into_string()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn htmx_requests_get_no_noscript_image() {
+        // htmx parses a response with scripting off, so the image would load.
+        let mut h = granted();
+        h.insert("hx-request", HeaderValue::from_static("true"));
+        let p = MetaPixel::for_request(&config(), &h);
+        assert!(p.is_active());
+        assert!(p.noscript().into_string().is_empty());
+        assert!(!p.head().into_string().is_empty());
+        let ev = Event::standard(StandardEvent::Lead);
+        assert!(!p.track(&ev).into_string().is_empty());
+    }
+
+    #[test]
+    fn history_restore_requests_get_no_event_blocks() {
+        // htmx re-fetches the page on a history cache miss. The events
+        // fired on the first visit.
+        let mut h = granted();
+        h.insert("hx-request", HeaderValue::from_static("true"));
+        h.insert(
+            "hx-history-restore-request",
+            HeaderValue::from_static("true"),
+        );
+        let p = MetaPixel::for_request(&config(), &h);
+        let ev = Event::standard(StandardEvent::Lead);
+        assert!(p.track(&ev).into_string().is_empty());
+        assert!(p.noscript().into_string().is_empty());
+        assert!(p.click_attr(&ev).is_some());
+    }
+
+    #[test]
+    fn for_request_with_bad_config_is_off() {
+        // Not validated, it would inject hit parameters and a `data:` script.
+        let mut c = config();
+        c.require_consent = false;
+        c.pixel_ids = vec!["1&ev=Purchase".into()];
+        assert!(!MetaPixel::for_request(&c, &HeaderMap::new()).is_active());
+        let mut c = config();
+        c.require_consent = false;
+        c.script_url = "data:text/javascript,alert(1)".into();
+        assert!(!MetaPixel::for_request(&c, &HeaderMap::new()).is_active());
+    }
+
+    #[test]
+    fn revoke_trigger_is_an_htmx_event_name() {
+        assert_eq!(REVOKE_HX_TRIGGER, "autumn:meta-pixel-revoke");
+        assert!(HeaderValue::from_str(REVOKE_HX_TRIGGER).is_ok());
     }
 
     #[test]

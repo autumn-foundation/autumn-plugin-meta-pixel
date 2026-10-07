@@ -11,6 +11,7 @@ import vm from 'node:vm';
 const LOADER = readFileSync(new URL('../../assets/meta-pixel.js', import.meta.url), 'utf8');
 const EVENT_SEL = 'script[type="application/json"][data-autumn-meta-pixel-event]';
 const CLICK_SEL = '[data-meta-pixel]';
+const NOSCRIPT_SEL = 'noscript[data-autumn-meta-pixel]';
 
 class El {
   constructor(tag, attrs = {}, text = '') {
@@ -24,6 +25,11 @@ class El {
   setAttribute(n, v) { this.attrs[n] = String(v); }
   hasAttribute(n) { return n in this.attrs; }
   appendChild(c) { c.parent = this; this.children.push(c); return c; }
+  removeAttribute(n) { delete this.attrs[n]; }
+  remove() {
+    if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this);
+    this.parent = null;
+  }
   matches(sel) {
     if (sel === EVENT_SEL) {
       return this.tagName === 'SCRIPT'
@@ -31,6 +37,9 @@ class El {
         && this.hasAttribute('data-autumn-meta-pixel-event');
     }
     if (sel === CLICK_SEL) return this.hasAttribute('data-meta-pixel');
+    if (sel === NOSCRIPT_SEL) {
+      return this.tagName === 'NOSCRIPT' && this.hasAttribute('data-autumn-meta-pixel');
+    }
     throw new Error(`fake DOM: selector not supported: ${sel}`);
   }
   querySelectorAll(sel) {
@@ -52,6 +61,7 @@ class El {
 
 function makeEnv({ config, gpc, body = [], fbq } = {}) {
   const listeners = {};
+  const options = {};
   const head = new El('head');
   const bodyEl = new El('body');
   const root = new El('html');
@@ -68,7 +78,10 @@ function makeEnv({ config, gpc, body = [], fbq } = {}) {
     getElementById: (id) => root.querySelectorAllById(id),
     querySelectorAll: (sel) => root.querySelectorAll(sel),
     createElement: (tag) => new El(tag),
-    addEventListener: (type, fn) => { (listeners[type] ||= []).push(fn); },
+    addEventListener: (type, fn, opts) => {
+      (listeners[type] ||= []).push(fn);
+      options[type] = opts;
+    },
   };
   root.querySelectorAllById = (id) => {
     let hit = null;
@@ -92,7 +105,7 @@ function makeEnv({ config, gpc, body = [], fbq } = {}) {
   const plain = (v) => JSON.parse(JSON.stringify(v));
   const calls = () => (window.fbq ? plain(window.fbq.queue.map((args) => Array.from(args))) : null);
   const injected = () => head.children.filter((c) => c.tagName === 'SCRIPT' && c.src);
-  return { window, document, dispatch, calls, injected, run, bodyEl };
+  return { window, document, dispatch, calls, injected, run, bodyEl, options };
 }
 
 const CONFIG = {
@@ -124,9 +137,12 @@ test('config with no pixels: nothing loads', () => {
   assert.equal(env.window.fbq, undefined);
 });
 
-test('base code: init each pixel, PageView, async fbevents.js', () => {
+test('base code: init each pixel, PageView to each pixel, async fbevents.js', () => {
   const env = makeEnv({ config: CONFIG });
-  assert.deepEqual(env.calls(), [['init', '111'], ['init', '222'], ['track', 'PageView']]);
+  assert.deepEqual(env.calls(), [
+    ['init', '111'], ['init', '222'],
+    ['trackSingle', '111', 'PageView'], ['trackSingle', '222', 'PageView'],
+  ]);
   const [s] = env.injected();
   assert.equal(s.src, CONFIG.scriptUrl);
   assert.equal(s.async, true);
@@ -156,7 +172,9 @@ test('GPC: not honored when honorGpc is false', () => {
   assert.equal(env.injected().length, 1);
 });
 
-test('event blocks fire once, in order, with the right fbq method', () => {
+const BASE = 4; // init x2, PageView x2.
+
+test('event blocks fire once, in order, only to configured pixels', () => {
   const env = makeEnv({
     config: CONFIG,
     body: [
@@ -164,21 +182,38 @@ test('event blocks fire once, in order, with the right fbq method', () => {
       eventBlock({ name: 'Share', custom: true, params: {} }),
       eventBlock({ name: 'Lead', custom: false, params: {}, pixelId: '222' }),
       eventBlock({ name: 'Ping', custom: true, params: { a: 1 }, pixelId: '111', eventId: 'e' }),
+      eventBlock({ name: 'Leak', custom: false, params: {}, pixelId: '999' }),
     ],
   });
-  assert.deepEqual(env.calls().slice(3), [
-    ['track', 'Purchase', { value: 1, currency: 'EUR' }, { eventID: 'o-1' }],
-    ['trackCustom', 'Share', {}],
+  assert.deepEqual(env.calls().slice(BASE), [
+    ['trackSingle', '111', 'Purchase', { value: 1, currency: 'EUR' }, { eventID: 'o-1' }],
+    ['trackSingle', '222', 'Purchase', { value: 1, currency: 'EUR' }, { eventID: 'o-1' }],
+    ['trackSingleCustom', '111', 'Share', {}],
+    ['trackSingleCustom', '222', 'Share', {}],
     ['trackSingle', '222', 'Lead', {}],
     ['trackSingleCustom', '111', 'Ping', { a: 1 }, { eventID: 'e' }],
   ]);
   // htmx:load on the whole body scans again. Nothing fires twice.
   env.dispatch('htmx:load', { detail: { elt: env.bodyEl } });
-  assert.equal(env.calls().length, 7);
+  assert.equal(env.calls().length, BASE + 6);
+});
+
+test('a morph that drops the done attribute does not fire the block again', () => {
+  const block = eventBlock({ name: 'Lead', custom: false, params: {}, pixelId: '111' });
+  const env = makeEnv({ config: CONFIG, body: [block] });
+  assert.equal(env.calls().length, BASE + 1);
+  block.removeAttribute('data-autumn-meta-pixel-done');
+  env.dispatch('htmx:load', { detail: { elt: block } });
+  assert.equal(env.calls().length, BASE + 1);
+  // New content in the same element is a new event.
+  block.removeAttribute('data-autumn-meta-pixel-done');
+  block.textContent = JSON.stringify({ name: 'Contact', custom: false, params: {}, pixelId: '111' });
+  env.dispatch('htmx:load', { detail: { elt: block } });
+  assert.deepEqual(env.calls().at(-1), ['trackSingle', '111', 'Contact', {}]);
 });
 
 test('htmx:load fires events in swapped content, also the root itself', () => {
-  const env = makeEnv({ config: CONFIG });
+  const env = makeEnv({ config: { ...CONFIG, pixelIds: ['111'] } });
   const frag = new El('div');
   frag.appendChild(eventBlock({ name: 'AddToCart', custom: false, params: {} }));
   env.bodyEl.appendChild(frag);
@@ -187,21 +222,25 @@ test('htmx:load fires events in swapped content, also the root itself', () => {
   env.bodyEl.appendChild(lone);
   env.dispatch('htmx:load', { detail: { elt: lone } });
   env.dispatch('htmx:load', {});
-  assert.deepEqual(env.calls().slice(3), [['track', 'AddToCart', {}], ['track', 'Lead', {}]]);
+  assert.deepEqual(env.calls().slice(2), [
+    ['trackSingle', '111', 'AddToCart', {}], ['trackSingle', '111', 'Lead', {}],
+  ]);
 });
 
 test('HX-Trigger event fires each event in detail.events', () => {
-  const env = makeEnv({ config: CONFIG });
+  const env = makeEnv({ config: { ...CONFIG, pixelIds: ['111'] } });
   env.dispatch('autumn:meta-pixel', {
     detail: { events: [{ name: 'Lead', custom: false, params: {} }, { name: 'X', custom: true, params: {} }] },
   });
   env.dispatch('autumn:meta-pixel', { detail: {} });
   env.dispatch('autumn:meta-pixel', {});
-  assert.deepEqual(env.calls().slice(3), [['track', 'Lead', {}], ['trackCustom', 'X', {}]]);
+  assert.deepEqual(env.calls().slice(2), [
+    ['trackSingle', '111', 'Lead', {}], ['trackSingleCustom', '111', 'X', {}],
+  ]);
 });
 
-test('click on a data-meta-pixel element fires its event', () => {
-  const env = makeEnv({ config: CONFIG });
+test('click on a data-meta-pixel element fires its event, in the capture phase', () => {
+  const env = makeEnv({ config: { ...CONFIG, pixelIds: ['111'] } });
   const btn = new El('button', { 'data-meta-pixel': JSON.stringify({ name: 'Contact', custom: false, params: {} }) });
   const span = new El('span');
   btn.appendChild(span);
@@ -210,12 +249,14 @@ test('click on a data-meta-pixel element fires its event', () => {
   env.dispatch('click', { target: env.bodyEl });
   env.dispatch('click', { target: { nodeType: 3 } }); // Text node: no closest().
   env.dispatch('click', { target: null });
-  assert.deepEqual(env.calls().slice(3), [['track', 'Contact', {}]]);
+  assert.deepEqual(env.calls().slice(2), [['trackSingle', '111', 'Contact', {}]]);
+  // Capture: a handler that stops propagation does not hide the click.
+  assert.equal(env.options.click, true);
 });
 
 test('bad events are dropped, good ones still fire', () => {
   const env = makeEnv({
-    config: CONFIG,
+    config: { ...CONFIG, pixelIds: ['111'] },
     body: [
       new El('script', { type: 'application/json', 'data-autumn-meta-pixel-event': '' }, '{oops'),
       eventBlock({ custom: false, params: {} }),
@@ -228,19 +269,53 @@ test('bad events are dropped, good ones still fire', () => {
   const btn = new El('button', { 'data-meta-pixel': '{nope' });
   env.bodyEl.appendChild(btn);
   env.dispatch('click', { target: btn });
-  assert.deepEqual(env.calls().slice(3), [['track', 'Lead', {}], ['track', 'Lead', {}]]);
+  assert.deepEqual(env.calls().slice(2), [
+    ['trackSingle', '111', 'Lead', {}], ['trackSingle', '111', 'Lead', {}],
+  ]);
 });
 
-test('public API: autumnMetaPixel.track', () => {
-  const env = makeEnv({ config: CONFIG });
+test('an fbq error does not stop the other events', () => {
+  const seen = [];
+  const fbq = (...args) => {
+    if (args[2] === 'Bad') throw new Error('boom');
+    seen.push(JSON.parse(JSON.stringify(args)));
+  };
+  const env = makeEnv({
+    config: { ...CONFIG, pixelIds: ['111'] },
+    fbq,
+    body: [
+      eventBlock({ name: 'Bad', custom: false, params: {} }),
+      eventBlock({ name: 'After', custom: false, params: {} }),
+    ],
+  });
+  env.dispatch('autumn:meta-pixel', {
+    detail: { events: [{ name: 'Bad', custom: false, params: {} }, { name: 'AfterHx', custom: false, params: {} }] },
+  });
+  assert.deepEqual(seen.slice(2).map((c) => c[2]), ['After', 'AfterHx']);
+});
+
+test('noscript images of the plugin are removed when JavaScript runs', () => {
+  const ns = new El('noscript', { 'data-autumn-meta-pixel': '' });
+  const other = new El('noscript');
+  const env = makeEnv({ config: CONFIG, body: [ns, other] });
+  assert.equal(ns.parent, null);
+  assert.equal(other.parent, env.bodyEl);
+});
+
+test('public API: autumnMetaPixel.track and scan', () => {
+  const env = makeEnv({ config: { ...CONFIG, pixelIds: ['111'] } });
   env.window.autumnMetaPixel.track({ name: 'Search', custom: false, params: { search_string: 'x' } });
-  assert.deepEqual(env.calls().at(-1), ['track', 'Search', { search_string: 'x' }]);
+  assert.deepEqual(env.calls().at(-1), ['trackSingle', '111', 'Search', { search_string: 'x' }]);
+  const frag = new El('div');
+  frag.appendChild(eventBlock({ name: 'Lead', custom: false, params: {} }));
+  env.window.autumnMetaPixel.scan(frag);
+  assert.deepEqual(env.calls().at(-1), ['trackSingle', '111', 'Lead', {}]);
 });
 
 test('second run of the loader does nothing', () => {
   const env = makeEnv({ config: CONFIG });
   env.run();
-  assert.equal(env.calls().length, 3);
+  assert.equal(env.calls().length, BASE);
   assert.equal(env.injected().length, 1);
 });
 
@@ -248,8 +323,38 @@ test('app fbq already present: reuse it, no second fbevents.js', () => {
   const seen = [];
   const fbq = (...args) => seen.push(JSON.parse(JSON.stringify(args)));
   fbq.queue = [];
-  const env = makeEnv({ config: CONFIG, fbq });
+  const env = makeEnv({ config: { ...CONFIG, historyPageViews: false }, fbq });
   assert.equal(env.window.fbq, fbq);
   assert.equal(env.injected().length, 0);
-  assert.deepEqual(seen, [['init', '111'], ['init', '222'], ['track', 'PageView']]);
+  assert.equal(fbq.disablePushState, true);
+  assert.deepEqual(seen, [
+    ['init', '111'], ['init', '222'],
+    ['trackSingle', '111', 'PageView'], ['trackSingle', '222', 'PageView'],
+  ]);
+});
+
+test('revoke: consent revoke, no pushState page views, no more events', () => {
+  const env = makeEnv({ config: { ...CONFIG, pixelIds: ['111'] } });
+  const btn = new El('button', { 'data-meta-pixel': JSON.stringify({ name: 'Contact', custom: false, params: {} }) });
+  env.bodyEl.appendChild(btn);
+  env.dispatch('autumn:meta-pixel-revoke', {});
+  assert.deepEqual(env.calls().at(-1), ['consent', 'revoke']);
+  assert.equal(env.window.fbq.disablePushState, true);
+  const n = env.calls().length;
+  env.dispatch('click', { target: btn });
+  env.dispatch('autumn:meta-pixel', { detail: { events: [{ name: 'Lead', custom: false, params: {} }] } });
+  const frag = new El('div');
+  frag.appendChild(eventBlock({ name: 'Lead', custom: false, params: {} }));
+  env.dispatch('htmx:load', { detail: { elt: frag } });
+  env.window.autumnMetaPixel.track({ name: 'Lead', custom: false, params: {} });
+  assert.equal(env.calls().length, n);
+});
+
+test('a DOM element named fbq does not stop the loader', () => {
+  // <a id="fbq"> makes window.fbq an element (DOM clobbering).
+  const clobber = new El('a', { id: 'fbq' });
+  const env = makeEnv({ config: { ...CONFIG, pixelIds: ['111'] }, fbq: clobber });
+  assert.equal(typeof env.window.fbq, 'function');
+  assert.equal(env.injected().length, 1);
+  assert.deepEqual(env.calls(), [['init', '111'], ['trackSingle', '111', 'PageView']]);
 });
