@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 0bdb3c17b5564f97237800195ca93d92be559680954cb66d7fc583a370977f6c # shrinks to s = "<"
+cc 0e6fb98db17e8a33dc38b444446b50a90b6e122e35f5e3c0d865073c93b624e7 # shrinks to g = Gate { enabled: true, has_pixels: false, require_consent: false, consent_granted: false, honor_gpc: false, gpc_signal: false }
