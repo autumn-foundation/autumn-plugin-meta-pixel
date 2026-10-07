@@ -1,0 +1,7 @@
+#!/bin/sh
+# Enable: git config core.hooksPath .githooks
+set -e
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+node --test tests/js/*.test.mjs

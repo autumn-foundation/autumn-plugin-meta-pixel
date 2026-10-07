@@ -1,0 +1,31 @@
+{
+  "pixelIds": ["111", "222"],
+  "cases": [
+    {
+      "id": "purchase",
+      "event": {"name": "Purchase", "custom": false, "params": {"value": 9.5, "currency": "EUR"}, "eventId": "order-1"},
+      "calls": [
+        ["trackSingle", "111", "Purchase", {"value": 9.5, "currency": "EUR"}, {"eventID": "order-1"}],
+        ["trackSingle", "222", "Purchase", {"value": 9.5, "currency": "EUR"}, {"eventID": "order-1"}]
+      ]
+    },
+    {
+      "id": "custom",
+      "event": {"name": "ShareClick", "custom": true, "params": {"channel": "mail"}},
+      "calls": [
+        ["trackSingleCustom", "111", "ShareClick", {"channel": "mail"}],
+        ["trackSingleCustom", "222", "ShareClick", {"channel": "mail"}]
+      ]
+    },
+    {
+      "id": "single",
+      "event": {"name": "Lead", "custom": false, "params": {}, "pixelId": "222"},
+      "calls": [["trackSingle", "222", "Lead", {}]]
+    },
+    {
+      "id": "single-custom",
+      "event": {"name": "Ping", "custom": true, "params": {}, "eventId": "e", "pixelId": "111"},
+      "calls": [["trackSingleCustom", "111", "Ping", {}, {"eventID": "e"}]]
+    }
+  ]
+}
