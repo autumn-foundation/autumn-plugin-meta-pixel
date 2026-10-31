@@ -25,7 +25,7 @@ flowchart LR
 
 ```toml
 [dependencies]
-autumn-plugin-meta-pixel = "0.1"
+autumn-plugin-meta-pixel = "0.2"
 ```
 
 ```rust,ignore

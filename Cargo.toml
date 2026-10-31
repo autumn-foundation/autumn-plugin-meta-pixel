@@ -1,6 +1,6 @@
 [package]
 name = "autumn-plugin-meta-pixel"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88.0"
 description = "Meta Pixel plugin for autumn-web: consent-gated, CSP-safe pixel loader served as a plugin asset, with typed events"
