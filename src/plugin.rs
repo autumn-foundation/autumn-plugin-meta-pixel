@@ -165,7 +165,7 @@ impl Plugin for MetaPixelPlugin {
         Some(
             PluginContract::new(env!("CARGO_PKG_NAME"))
                 .plugin_version(env!("CARGO_PKG_VERSION"))
-                .autumn_web("0.8"),
+                .autumn_web("0.9"),
         )
     }
 
@@ -269,7 +269,7 @@ mod tests {
         let c = MetaPixelPlugin::new().contract().unwrap();
         let text = format!("{c:?}");
         assert!(text.contains("autumn-plugin-meta-pixel"), "{text}");
-        assert!(text.contains("0.8"), "{text}");
+        assert!(text.contains("0.9"), "{text}");
         assert_eq!(MetaPixelPlugin::new().name(), PLUGIN_NAME);
     }
 }

@@ -2,7 +2,7 @@
 
 ## 0.1.0 (unreleased)
 
-- First release for autumn-web 0.8.
+- First release for autumn-web 0.9.
 - `MetaPixelPlugin`: loader served through the `PluginAssets` seam (hashed URL, SRI).
 - `MetaPixel` extractor: `head`, `noscript`, `track`, `click_attr`, `hx_trigger_value`.
 - Consent gate (`autumn_web::consent`), Global Privacy Control, off switch.

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Meta Pixel plugin for autumn-web 0.8. Style for all docs and comments: ASD-STE100.
+Meta Pixel plugin for autumn-web 0.9. Style for all docs and comments: ASD-STE100.
 
 ## Layout
 
@@ -11,7 +11,7 @@ Meta Pixel plugin for autumn-web 0.8. Style for all docs and comments: ASD-STE10
 | `src/config.rs` | `[meta_pixel]` config, profile file, `AUTUMN_META_PIXEL__*` env overlay. |
 | `src/csp.rs` | CSP parse, check, and fix. |
 | `src/event.rs` | `StandardEvent`, `Event`, `Content`. One JSON format for all fire paths. |
-| `src/assets.rs` | The `PluginAssets` bundle (autumn 0.8 plugin assets seam). |
+| `src/assets.rs` | The `PluginAssets` bundle (autumn 0.9 plugin assets seam). |
 | `assets/meta-pixel.js` | The loader. No inline script, no `eval`. |
 | `src/pixel.rs` | `MetaPixel` extractor and markup. |
 | `src/plugin.rs` | `MetaPixelPlugin`, startup checks. |
