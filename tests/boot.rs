@@ -30,11 +30,13 @@ async fn boot_child_server() {
     if std::env::var(CHILD_MARK).is_err() {
         return;
     }
-    autumn_web::app()
-        .routes(routes![index])
-        .plugin(MetaPixelPlugin::new())
-        .run()
-        .await;
+    Box::pin(
+        autumn_web::app()
+            .routes(routes![index])
+            .plugin(MetaPixelPlugin::new())
+            .run(),
+    )
+    .await;
 }
 
 /// A command that runs this test binary again with a clean environment:

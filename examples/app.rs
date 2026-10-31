@@ -119,9 +119,11 @@ async fn withdraw() -> impl IntoResponse {
 
 #[autumn_web::main]
 async fn main() {
-    autumn_web::app()
-        .routes(routes![index, cart, thanks, accept, withdraw])
-        .plugin(MetaPixelPlugin::new())
-        .run()
-        .await;
+    Box::pin(
+        autumn_web::app()
+            .routes(routes![index, cart, thanks, accept, withdraw])
+            .plugin(MetaPixelPlugin::new())
+            .run(),
+    )
+    .await;
 }

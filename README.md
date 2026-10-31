@@ -1,8 +1,8 @@
 # autumn-plugin-meta-pixel
 
-Meta Pixel plugin for [autumn-web](https://github.com/autumn-foundation/autumn) 0.8.
+Meta Pixel plugin for [autumn-web](https://github.com/autumn-foundation/autumn) 0.9.
 
-- **No inline JavaScript.** The loader is a plugin asset (autumn 0.8 `PluginAssets`): a content-hashed, `immutable`, same-origin URL with SRI.
+- **No inline JavaScript.** The loader is a plugin asset (autumn 0.9 `PluginAssets`): a content-hashed, `immutable`, same-origin URL with SRI.
 - **Consent first.** No pixel markup until the visitor consents (`autumn_web::consent`). No pixel for a Global Privacy Control request. A withdrawal stops a pixel that runs in the page.
 - **Typed events.** All Meta standard events, checked custom events, typed parameters, `eventID`, and single-pixel targets. Events go only to the pixels in your config.
 - **htmx ready.** Events fire from data blocks (also after a swap), from an `HX-Trigger` header, or from a click attribute. Boost, history restore, and morph swaps do not fire an event twice.
