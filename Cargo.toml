@@ -1,8 +1,8 @@
 [package]
 name = "autumn-plugin-meta-pixel"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
-rust-version = "1.88.0"
+rust-version = "1.97.0"
 description = "Meta Pixel plugin for autumn-web: consent-gated, CSP-safe pixel loader served as a plugin asset, with typed events"
 license = "Apache-2.0"
 repository = "https://github.com/autumn-foundation/autumn-plugin-meta-pixel"
@@ -13,7 +13,7 @@ exclude = [".github/", ".githooks/", "docs/", "tests/js/", "tests/e2e/", "rust-t
 
 [dependencies]
 # `maud` gives the `PluginAssets` tag helpers. The host app picks the rest.
-autumn-web = { version = "0.9.0", default-features = false, features = ["maud"] }
+autumn-web = { version = "0.10.0", default-features = false, features = ["maud"] }
 # `maud::html!` expands to `::maud::...` paths. Use the maud version of autumn-web.
 maud = "0.27"
 serde = { version = "1", features = ["derive"] }
@@ -24,7 +24,7 @@ tracing = "0.1"
 
 [dev-dependencies]
 # `htmx` serves htmx.min.js for the example app.
-autumn-web = { version = "0.9.0", default-features = false, features = ["maud", "htmx"] }
+autumn-web = { version = "0.10.0", default-features = false, features = ["maud", "htmx"] }
 proptest = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 

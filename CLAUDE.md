@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Meta Pixel plugin for autumn-web 0.9. Style for all docs and comments: ASD-STE100.
+Meta Pixel plugin for autumn-web 0.10. Style for all docs and comments: ASD-STE100.
 
 ## Layout
 
