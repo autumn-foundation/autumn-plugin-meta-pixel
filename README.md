@@ -28,16 +28,25 @@ flowchart LR
 autumn-plugin-meta-pixel = "0.3"
 ```
 
-```rust,ignore
+```rust,no_run
 use autumn_plugin_meta_pixel::MetaPixelPlugin;
+use autumn_web::prelude::*;
 
 const POLICY_VERSION: u32 = 1; // Your cookie policy version.
 
-autumn_web::app()
-    .routes(routes![index])
-    .plugin(MetaPixelPlugin::new().consent_policy_version(POLICY_VERSION))
-    .run()
-    .await;
+#[get("/")]
+async fn index() -> &'static str {
+    "Hello"
+}
+
+#[autumn_web::main]
+async fn main() {
+    autumn_web::app()
+        .routes(routes![index])
+        .plugin(MetaPixelPlugin::new().consent_policy_version(POLICY_VERSION))
+        .run()
+        .await;
+}
 ```
 
 ```toml
@@ -55,8 +64,9 @@ enabled = false
 
 Take `MetaPixel` as a handler argument. It never fails. When the pixel is off, each method gives empty markup or `None`.
 
-```rust,ignore
+```rust,no_run
 use autumn_plugin_meta_pixel::{Event, MetaPixel, StandardEvent};
+use autumn_web::prelude::*;
 
 #[get("/thanks")]
 async fn thanks(pixel: MetaPixel) -> Markup {
@@ -105,9 +115,15 @@ The loader sends each event with `trackSingle` to each pixel in `pixel_ids`. So 
 With `require_consent = true` (default), the plugin renders nothing until
 `Consent::allows(consent_category, consent_policy_version)` is `true`. Record consent with the same category, and give the plugin your policy version:
 
-```rust,ignore
-autumn_web::consent::accept_all_cookie(&["marketing"], POLICY_VERSION)
-MetaPixelPlugin::new().consent_policy_version(POLICY_VERSION)
+```rust
+use autumn_plugin_meta_pixel::MetaPixelPlugin;
+
+const POLICY_VERSION: u32 = 1;
+
+// The Set-Cookie value when the visitor accepts.
+let cookie = autumn_web::consent::accept_all_cookie(&["marketing"], POLICY_VERSION);
+// The plugin checks the same version.
+let plugin = MetaPixelPlugin::new().consent_policy_version(POLICY_VERSION);
 ```
 
 When the visitor withdraws consent, send `REVOKE_HX_TRIGGER` as the `HX-Trigger` value (or `HX-Refresh: true`). With `hx-boost`, the page and `fbevents.js` stay in memory. The loader then calls `fbq('consent', 'revoke')`, stops `pushState` page views, and sends no more events. If the visitor gives consent again, do a full page load (`HX-Refresh: true`).
@@ -156,8 +172,13 @@ Sources, in order (later wins): `[meta_pixel]` in `autumn.toml`, `[profile.<name
 
 ## Test your templates
 
-```rust,ignore
-let pixel = MetaPixel::for_request(&config, &headers);
+```rust
+use autumn_plugin_meta_pixel::{MetaPixel, MetaPixelConfig};
+use autumn_web::reexports::axum::http::HeaderMap;
+
+let mut config = MetaPixelConfig::with_pixel_ids(["1234567890"]);
+config.require_consent = false;
+let pixel = MetaPixel::for_request(&config, &HeaderMap::new());
 assert!(pixel.head().into_string().contains("autumn-meta-pixel-config"));
 ```
 

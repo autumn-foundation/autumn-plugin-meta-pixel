@@ -37,6 +37,8 @@ cargo build --example app && NODE_PATH=<dir>/node_modules node tests/e2e/browser
 
 ## Rules
 
+- README Rust snippets are doctests. Make them compile; use `no_run`, not `ignore`.
+  `tests/doc_snippets.rs` checks the TOML snippets and the version pins in the docs.
 - Write the test first. See it fail. Then write the code.
 - A change to `src/policy.rs` needs the same change in `verus/policy.rs`. Run Verus.
 - No inline JavaScript. Put data in `application/json` blocks. Escape all JSON in a `<script>` block with `escape_json_for_html`.
