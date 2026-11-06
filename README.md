@@ -1,6 +1,6 @@
 # autumn-plugin-meta-pixel
 
-Meta Pixel plugin for [autumn-web](https://github.com/autumn-foundation/autumn) 0.9.
+Meta Pixel plugin for [autumn-web](https://github.com/autumn-foundation/autumn) 0.10.
 
 - **No inline JavaScript.** The loader is a plugin asset (autumn 0.9 `PluginAssets`): a content-hashed, `immutable`, same-origin URL with SRI.
 - **Consent first.** No pixel markup until the visitor consents (`autumn_web::consent`). No pixel for a Global Privacy Control request. A withdrawal stops a pixel that runs in the page.
@@ -25,7 +25,7 @@ flowchart LR
 
 ```toml
 [dependencies]
-autumn-plugin-meta-pixel = "0.2"
+autumn-plugin-meta-pixel = "0.3"
 ```
 
 ```rust,ignore
