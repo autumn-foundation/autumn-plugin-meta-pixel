@@ -181,7 +181,7 @@ fn app_boots_with_env_config() {
             panic!("the app stopped at boot ({status}):\n{err}");
         }
         assert!(
-            start.elapsed() < Duration::from_secs(60),
+            start.elapsed() < Duration::from_mins(1),
             "the app did not answer"
         );
         if let Ok(page) = http_get(port, "/") {
