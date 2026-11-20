@@ -1,4 +1,4 @@
-//! Meta Pixel plugin for autumn-web 0.10.
+//! Meta Pixel plugin for autumn-web 0.11.
 //!
 //! - **Loader:** a plugin asset (`PluginAssets`) with a content-hashed URL
 //!   and SRI. No inline JavaScript.
